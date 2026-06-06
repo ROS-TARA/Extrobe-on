@@ -4,7 +4,17 @@ import LoginSignup from "./LoginSignup";
 import GameSection from "./GameSection";
 import Rewards  from "./Rewards";
 import Settings from "./Settings";
+// In StrangerPlay_Main.jsx or GameSection.jsx
 import GameScreen from "./GameScreen";
+
+// pass props like this:
+<GameScreen
+  gameMode="dontlaugh"
+  opponent={{ name:"stranger_7829", flag:"🇧🇷", avatar:"🧑", pts:3200 }}
+  entryFee={10}
+  myPoints={74}
+  onBack={() => setPage("games")}
+/>
 
 /* ─────────────────────────────────────────────
    GLOBAL STYLES
