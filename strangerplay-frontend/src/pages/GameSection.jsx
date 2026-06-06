@@ -444,80 +444,127 @@ function FloppyFaceRace({ onBack, myPoints = 74, opponentName = "stranger_7829",
   }, []);
 
   /* ── GAME LOOP ──────────────────────────────────────────────────────
-     The core problem was two-fold:
-     1. birdCY only updated INSIDE "if preds.length > 0" — if BlazeFace
-        missed a frame (bad light, angle, etc) the bird froze at center.
-        Fix: always lerp birdCY toward the target so it moves smoothly
-        even on missed frames.
-     2. AudioContext was created during camera setup but browsers suspend
-        it until a real user gesture. Now we resume it inside the loop
-        the first time — at that point the user has already tapped START
-        which counts as a gesture.
+     ROOT CAUSE OF "bird doesn't move":
+     The loop was async and used "await estimateFaces()" inside
+     requestAnimationFrame. rAF does NOT await async functions —
+     it fires the callback, hits the await, and immediately schedules
+     the next frame without waiting for face data. Result: targetCY
+     never updates because the await resolves after rAF already moved on.
+
+     FIX: split into two completely separate loops:
+       1. faceLoop  — runs on setInterval(33ms ≈ 30fps), purely async,
+                      writes headY + targetCX/targetCY to gameRef
+       2. renderLoop — pure sync rAF, reads from gameRef and draws.
+                       No async, no awaits, never blocks.
+     They share data through gameRef (a mutable ref = no re-renders).
+
+     KEYBOARD FALLBACK: arrow keys + mouse/touch move the bird when
+     face tracking doesn't detect you. So the game is always playable.
   ─────────────────────────────────────────────────────────────────── */
   useEffect(() => {
     if (screen !== "playing") return;
     const canvas = canvasRef.current;
     const ctx    = canvas.getContext("2d");
-    const W = canvas.width  || canvas.offsetWidth;
-    const H = canvas.height || canvas.offsetHeight;
+    const W = canvas.width  || canvas.offsetWidth  || 640;
+    const H = canvas.height || canvas.offsetHeight || 480;
     const g = gameRef.current;
 
-    // Smoothed target position — face detection writes here,
-    // the render reads from g.birdCX / g.birdCY which lerp toward it
-    let targetCX = g.birdCX;
-    let targetCY = g.birdCY;
-    let faceFrame = 0;
+    // Separate mutable tracking state — written by faceLoop, read by renderLoop
+    // Using a plain object (not state) so writes are instant, no re-renders
+    const track = {
+      targetCX: g.birdCX,
+      targetCY: g.birdCY,
+      faceDetected: false,
+      keyUp: false,
+      keyDown: false,
+    };
 
-    const loop = async () => {
-      // ── 1. FACE TRACKING ──────────────────────────────────────────
-      // Run on every frame (removed the % 2 skip — it was causing lag)
-      if (modelRef.current && videoRef.current?.readyState >= 2) {
-        try {
-          const preds = await modelRef.current.estimateFaces(videoRef.current, false);
-          if (preds.length > 0) {
-            const face = preds[0];
-            const [x1, y1] = face.topLeft;
-            const [x2, y2] = face.bottomRight;
-            const faceCX = (x1 + x2) / 2;
-            const faceCY = (y1 + y2) / 2;
-            const faceH  = y2 - y1;
-
-            // headY = 0 (top of camera) → 1 (bottom of camera)
-            const rawHeadY = faceCY / videoRef.current.videoHeight;
-            g.headY    = Math.max(0, Math.min(1, rawHeadY));
-            g.faceSize = Math.max(50, Math.min(130, faceH * 1.1));
-
-            const lm = face.landmarks || [];
-            if (lm.length >= 2) {
-              g.headTilt = Math.atan2(lm[1][1] - lm[0][1], lm[1][0] - lm[0][0]);
-            }
-
-            // Mirrored X — face at left of camera = bird at right of canvas
-            const pad = 80;
-            targetCX = W - (faceCX / videoRef.current.videoWidth) * W;
-            targetCY = pad + g.headY * (H - pad * 2);
-          }
-        } catch {}
+    // ── KEYBOARD FALLBACK ─────────────────────────────────────────
+    // Arrow keys move the bird when face tracking misses you
+    const onKey = (e) => {
+      if (e.type === "keydown") {
+        if (e.key === "ArrowUp"   || e.key === "w") track.keyUp   = true;
+        if (e.key === "ArrowDown" || e.key === "s") track.keyDown = true;
+      } else {
+        if (e.key === "ArrowUp"   || e.key === "w") track.keyUp   = false;
+        if (e.key === "ArrowDown" || e.key === "s") track.keyDown = false;
       }
+    };
+    // Mouse/touch move on the canvas — drag the bird
+    const onMouseMove = (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+      const relY = clientY - rect.top;
+      track.targetCY = Math.max(80, Math.min(H - 80, relY));
+      track.faceDetected = true; // treat mouse as "face found"
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("keyup",   onKey);
+    canvas.addEventListener("mousemove", onMouseMove);
+    canvas.addEventListener("touchmove", onMouseMove, { passive: true });
 
-      // ── 2. SMOOTH LERP — bird glides toward target position ───────
-      // lerp factor 0.2 = 20% of distance per frame ≈ natural feel
-      // Without this the bird teleports or freezes on missed frames
-      g.birdCX += (targetCX - g.birdCX) * 0.2;
-      g.birdCY += (targetCY - g.birdCY) * 0.2;
+    // ── FACE DETECTION LOOP (async, 30fps) ────────────────────────
+    // Completely separate from render. Writes to track{} object.
+    // rAF never touches this — no await contamination.
+    const faceInterval = setInterval(async () => {
+      if (!modelRef.current) return;
+      const vid = videoRef.current;
+      if (!vid || vid.readyState < 2 || vid.videoWidth === 0) return;
 
-      // ── 3. MIC / BOOST ────────────────────────────────────────────
-      // Resume AudioContext — browsers suspend it until a user gesture.
-      // START RACE button = user gesture, so resuming here is safe.
+      try {
+        const preds = await modelRef.current.estimateFaces(vid, false);
+        if (preds.length > 0) {
+          const face   = preds[0];
+          const [x1, y1] = face.topLeft;
+          const [x2, y2] = face.bottomRight;
+          const faceCX   = (x1 + x2) / 2;
+          const faceCY   = (y1 + y2) / 2;
+          const faceH    = y2 - y1;
+
+          // headY: 0 = top of camera feed, 1 = bottom
+          const rawY = faceCY / vid.videoHeight;
+          g.headY    = Math.max(0, Math.min(1, rawY));
+          g.faceSize = Math.max(50, Math.min(130, faceH * 1.1));
+
+          const lm = face.landmarks || [];
+          if (lm.length >= 2) {
+            g.headTilt = Math.atan2(lm[1][1] - lm[0][1], lm[1][0] - lm[0][0]);
+          }
+
+          const pad = 80;
+          // Mirror X so moving head left = bird moves left on screen
+          track.targetCX    = W - (faceCX / vid.videoWidth) * W;
+          track.targetCY    = pad + g.headY * (H - pad * 2);
+          track.faceDetected = true;
+        } else {
+          track.faceDetected = false;
+        }
+      } catch {}
+    }, 33); // ~30fps for detection — fast enough, not too heavy
+
+    // ── RENDER LOOP (sync rAF, 60fps) ─────────────────────────────
+    // Pure synchronous. No async, no await. Just reads + draws.
+    const renderLoop = () => {
+      // Resume AudioContext if suspended (browser blocks until user gesture)
       if (analyserRef.current?.context?.state === "suspended") {
         analyserRef.current.context.resume().catch(() => {});
       }
+
+      // Keyboard input moves targetCY directly
+      const keySpeed = 6;
+      if (track.keyUp)   track.targetCY = Math.max(80, track.targetCY - keySpeed);
+      if (track.keyDown) track.targetCY = Math.min(H - 80, track.targetCY + keySpeed);
+
+      // Lerp bird toward target — smooth even on missed detection frames
+      g.birdCX += (track.targetCX - g.birdCX) * 0.18;
+      g.birdCY += (track.targetCY - g.birdCY) * 0.18;
+
+      // ── MIC / BOOST ─────────────────────────────────────────────
       const vol = getMicVolume();
       noiseLvlRef.current = Math.round(vol);
       setNoiseLevel(Math.round(vol));
-
       if (vol > NOISE_THRESHOLD) {
-        g.speed   = BOOST_SPEED;
+        g.speed    = BOOST_SPEED;
         g.boosting = true;
         setBoosting(true);
         addParticles(g.particles, g.birdCX, g.birdCY, "#ffd60a", 5);
@@ -527,7 +574,7 @@ function FloppyFaceRace({ onBack, myPoints = 74, opponentName = "stranger_7829",
         setBoosting(g.boosting);
       }
 
-      // ── 4. PIPES ──────────────────────────────────────────────────
+      // ── PIPES ───────────────────────────────────────────────────
       g.frame++;
       if (g.frame % 90 === 0) {
         const topH = 80 + Math.random() * (H - PIPE_GAP - 120);
@@ -535,7 +582,6 @@ function FloppyFaceRace({ onBack, myPoints = 74, opponentName = "stranger_7829",
       }
       g.pipes.forEach(p => { p.x -= g.speed; });
       g.pipes = g.pipes.filter(p => p.x > -PIPE_WIDTH - 10);
-
       g.pipes.forEach(p => {
         if (!p.scored && p.x + PIPE_WIDTH < g.birdCX) {
           p.scored = true;
@@ -546,17 +592,15 @@ function FloppyFaceRace({ onBack, myPoints = 74, opponentName = "stranger_7829",
         }
       });
 
-      // ── 5. COLLISION ──────────────────────────────────────────────
+      // ── COLLISION ───────────────────────────────────────────────
       if (g.graceFrames > 0) g.graceFrames--;
-
       const bs  = g.faceSize / 2 - 10;
       const hit = g.graceFrames === 0 && g.pipes.some(p => {
         const inX = g.birdCX + bs > p.x + 8 && g.birdCX - bs < p.x + PIPE_WIDTH - 8;
         const inY = g.birdCY - bs < p.topH  || g.birdCY + bs > p.topH + PIPE_GAP;
         return inX && inY;
       });
-      const faceActive  = modelRef.current !== null;
-      const outOfBounds = faceActive && g.graceFrames === 0 &&
+      const outOfBounds = g.graceFrames === 0 && track.faceDetected &&
         (g.birdCY - bs < 0 || g.birdCY + bs > H);
 
       if (hit || outOfBounds) {
@@ -567,91 +611,103 @@ function FloppyFaceRace({ onBack, myPoints = 74, opponentName = "stranger_7829",
         return;
       }
 
-      // ── 6. PARTICLES ──────────────────────────────────────────────
+      // ── PARTICLES ───────────────────────────────────────────────
       g.particles.forEach(p => { p.x += p.vx; p.y += p.vy; p.vy += 0.15; p.life--; });
       g.particles = g.particles.filter(p => p.life > 0);
 
-      // ── 7. DRAW ───────────────────────────────────────────────────
-      // Mirror camera so it feels like a mirror (natural movement)
-      ctx.save(); ctx.translate(W, 0); ctx.scale(-1, 1);
-      ctx.drawImage(videoRef.current, 0, 0, W, H);
-      ctx.restore();
-
-      // dark overlay so game elements are readable
+      // ── DRAW ────────────────────────────────────────────────────
+      if (videoRef.current?.readyState >= 2) {
+        ctx.save(); ctx.translate(W, 0); ctx.scale(-1, 1);
+        ctx.drawImage(videoRef.current, 0, 0, W, H);
+        ctx.restore();
+      } else {
+        ctx.fillStyle = "#0a0a0a";
+        ctx.fillRect(0, 0, W, H);
+      }
       ctx.fillStyle = "rgba(0,0,0,0.28)"; ctx.fillRect(0, 0, W, H);
 
-      // pipes
       g.pipes.forEach(p => drawPipe(ctx, p, H));
-
-      // bird (face ring + wings)
       drawBirdDecor(ctx, g.birdCX, g.birdCY, g.faceSize, g.headTilt, g.alive, g.boosting);
 
-      // particles
       g.particles.forEach(p => {
         const alpha = p.life / p.maxLife;
         ctx.beginPath();
         ctx.arc(p.x, p.y, p.r * alpha, 0, Math.PI * 2);
-        ctx.fillStyle  = p.color;
+        ctx.fillStyle   = p.color;
         ctx.globalAlpha = alpha;
         ctx.fill();
       });
       ctx.globalAlpha = 1;
 
-      // score
-      ctx.font      = "bold 52px \'Bebas Neue\', sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillStyle  = "#ffffff";
+      // score display
+      ctx.font        = "bold 52px 'Bebas Neue', sans-serif";
+      ctx.textAlign   = "center";
+      ctx.fillStyle   = "#ffffff";
       ctx.shadowColor = "#00f5a0"; ctx.shadowBlur = 16;
       ctx.fillText(g.score, W / 2, 62);
-      ctx.shadowBlur = 0;
+      ctx.shadowBlur  = 0;
 
-      // grace period indicator — green flash while immune
+      // face tracking status indicator (top-left, small)
+      ctx.font      = "11px 'JetBrains Mono', monospace";
+      ctx.textAlign = "left";
+      ctx.fillStyle = track.faceDetected ? "rgba(0,245,160,0.7)" : "rgba(255,77,109,0.6)";
+      ctx.fillText(track.faceDetected ? "● face locked" : "● no face — use mouse/arrows", 14, 24);
+
+      // grace period flash
       if (g.graceFrames > 0) {
-        ctx.fillStyle = `rgba(0,245,160,${(g.graceFrames / 90) * 0.08})`;
+        ctx.fillStyle = `rgba(0,245,160,${(g.graceFrames / 90) * 0.07})`;
         ctx.fillRect(0, 0, W, H);
-        ctx.font = "14px \'JetBrains Mono\', monospace";
+        ctx.font      = "12px 'JetBrains Mono', monospace";
         ctx.textAlign = "center";
-        ctx.fillStyle = "rgba(0,245,160,0.6)";
-        ctx.fillText("get in position...", W / 2, H - 24);
+        ctx.fillStyle = "rgba(0,245,160,0.5)";
+        ctx.fillText("move into frame...", W / 2, H - 20);
       }
 
-      // noise / boost meter
-      const meterW = 140, meterH = 10, mx = 16, my = H - 40;
-      ctx.fillStyle = "rgba(0,0,0,0.5)";
+      // noise meter
+      const meterW = 140, meterH = 10, mx = 14, my = H - 38;
+      ctx.fillStyle = "rgba(0,0,0,0.45)";
       ctx.beginPath(); ctx.roundRect(mx, my, meterW, meterH, 5); ctx.fill();
-      const mFill = Math.max(0, Math.min(1, vol / 100));
-      const mCol  = vol > NOISE_THRESHOLD ? "#ffd60a" : "#00f5a0";
+      const mCol = vol > NOISE_THRESHOLD ? "#ffd60a" : "#00f5a0";
       ctx.fillStyle   = mCol;
       ctx.shadowColor = mCol;
       ctx.shadowBlur  = vol > NOISE_THRESHOLD ? 14 : 0;
-      ctx.beginPath(); ctx.roundRect(mx, my, mFill * meterW, meterH, 5); ctx.fill();
-      ctx.shadowBlur  = 0;
-      ctx.font        = "10px \'JetBrains Mono\', monospace";
-      ctx.textAlign   = "left";
-      ctx.fillStyle   = "rgba(255,255,255,0.45)";
+      const fillW = Math.max(0, Math.min(1, vol / 100)) * meterW;
+      ctx.beginPath(); ctx.roundRect(mx, my, fillW, meterH, 5); ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.font       = "10px 'JetBrains Mono', monospace";
+      ctx.textAlign  = "left";
+      ctx.fillStyle  = "rgba(255,255,255,0.4)";
       ctx.fillText("🔊 SHOUT TO BOOST", mx, my - 6);
 
       if (g.boosting) {
-        ctx.fillStyle = "rgba(255,214,10,0.06)"; ctx.fillRect(0, 0, W, H);
-        ctx.font = "bold 18px \'Bebas Neue\', sans-serif";
-        ctx.textAlign = "right";
+        ctx.fillStyle = "rgba(255,214,10,0.05)"; ctx.fillRect(0, 0, W, H);
+        ctx.font        = "bold 18px 'Bebas Neue', sans-serif";
+        ctx.textAlign   = "right";
         ctx.fillStyle   = "#ffd60a";
         ctx.shadowColor = "#ffd60a"; ctx.shadowBlur = 14;
-        ctx.fillText("⚡ BOOST", W - 16, H - 20);
-        ctx.shadowBlur = 0;
+        ctx.fillText("⚡ BOOST", W - 14, H - 18);
+        ctx.shadowBlur  = 0;
       }
 
-      // opponent score top-right
-      ctx.font      = "13px \'JetBrains Mono\', monospace";
+      // opponent score
+      ctx.font      = "12px 'JetBrains Mono', monospace";
       ctx.textAlign = "right";
-      ctx.fillStyle  = "rgba(255,77,109,0.9)";
-      ctx.fillText(`${opponentName} ${opponentFlag} : ${oppScore}`, W - 14, 28);
+      ctx.fillStyle  = "rgba(255,77,109,0.85)";
+      ctx.fillText(`${opponentName} ${opponentFlag} : ${oppScore}`, W - 14, 44);
 
-      animRef.current = requestAnimationFrame(loop);
+      animRef.current = requestAnimationFrame(renderLoop);
     };
 
-    animRef.current = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(animRef.current);
+    animRef.current = requestAnimationFrame(renderLoop);
+
+    return () => {
+      cancelAnimationFrame(animRef.current);
+      clearInterval(faceInterval);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keyup",   onKey);
+      canvas.removeEventListener("mousemove", onMouseMove);
+      canvas.removeEventListener("touchmove", onMouseMove);
+    };
   }, [screen, opponentName, opponentFlag, oppScore, getMicVolume]);
   function addReaction(emoji) {
     const id = Date.now();
