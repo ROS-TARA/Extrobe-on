@@ -264,7 +264,7 @@ function MatchRow({ opponent, flag, game, result, pts, duration, ago, delay }) {
     <div className="match-row fade-up" style={{
       animationDelay: `${delay}s`,
       display: "grid",
-      gridTemplateColumns: "42px 1fr 130px 60px 70px 70px",
+      gridTemplateColumns: "42px 1fr minmax(80px,130px) 60px 70px",
       alignItems: "center", gap: 12,
       padding: "14px 20px",
       borderBottom: "1px solid rgba(255,255,255,0.04)",
@@ -320,11 +320,29 @@ function MatchRow({ opponent, flag, game, result, pts, duration, ago, delay }) {
 }
 
 /* ─── MAIN PROFILE COMPONENT ─── */
-export default function Profile() {
+export default function Profile({ onNavigate, user, points: propPoints }) {
   const [tab, setTab] = useState("stats");
   const [editMode, setEditMode] = useState(false);
-  const [username, setUsername] = useState("raj_np");
-  const [bio, setBio] = useState("here to embarrass strangers and earn points 🇳🇵");
+
+  // Pull data from the passed-in user object (set after login/signup).
+  // Fall back to defaults so the page never crashes if user is null.
+  // user object from server: { username, name, email, points, wins, gamesPlayed, flag, country }
+  const [username, setUsername] = useState(user?.username || "guest");
+  const [bio, setBio] = useState(user?.bio || "here to embarrass strangers 👾");
+
+  // Real stats from the user object — all start at 0 for new accounts.
+  const points      = propPoints     ?? user?.points      ?? 0;
+  const wins        = user?.wins        ?? 0;
+  const gamesPlayed = user?.gamesPlayed ?? 0;
+  const followers   = user?.followers   ?? 0;  // starts at 0, grows as people follow
+  const following   = user?.following   ?? 0;
+  const flag        = user?.flag        ?? "🌍";
+  const country     = user?.country     ?? "";
+
+  // goBack — if onNavigate is passed (from StrangerPlay_Main), use it.
+  // Otherwise fall back to browser history. This is called "prop drilling"
+  // — the parent controls navigation, the child just calls the function.
+  const goBack = () => onNavigate ? onNavigate("home") : window.history.back();
 
   const tabs = ["stats", "badges", "history", "friends"];
 
@@ -337,47 +355,51 @@ export default function Profile() {
       <Orb color="#00d4ff" size="400px" top="40%" left="70%" delay={3} />
       <Orb color="#ff4d6d" size="350px" top="80%" left="10%" delay={5} />
 
-      <div style={{ position: "relative", zIndex: 1, minHeight: "100vh",
+      {/* 
+        No top nav here — StrangerPlay_Main already has one fixed at top.
+        No bottom nav here — StrangerPlay_Main renders it (with includes() guard).
+        Profile just needs paddingTop: 64 (nav height) and paddingBottom: 80 (bottom nav height).
+      */}
+      <div style={{
+        position: "relative", zIndex: 1, minHeight: "100vh",
         background: `linear-gradient(to right,
           #141415 0%,#141415 12.5%,#181819 12.5%,#181819 25%,
           #1c1d1e 25%,#1c1d1e 37.5%,#212224 37.5%,#212224 50%,
           #262729 50%,#262729 62.5%,#2b2c2f 62.5%,#2b2c2f 75%,
           #303235 75%,#303235 87.5%,#36383b 87.5%,#36383b 100%)`,
-        paddingBottom: 100,
+        paddingTop: 64,   // height of StrangerPlay_Main top nav
+        paddingBottom: 80, // height of bottom nav
       }}>
 
-        {/* ── TOP NAV ── */}
-        <nav style={{
-          position: "fixed", top: 0, left: 0, right: 0, zIndex: 100,
-          display: "flex", alignItems: "center", justifyContent: "space-between",
-          padding: "16px 40px",
-          background: "rgba(14,14,15,0.75)", backdropFilter: "blur(24px)",
-          borderBottom: "1px solid rgba(255,255,255,0.05)",
+        {/* ── BACK BUTTON (mobile friendly) ── */}
+        <div style={{
+          padding: "12px clamp(16px,4vw,48px) 0",
+          maxWidth: 1000, margin: "0 auto",
         }}>
-          <div style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 22, letterSpacing: 3, color: "#00f5a0" }}>
-            STRANGERPLAY
-          </div>
-          <div style={{
-            fontFamily: "'JetBrains Mono',monospace", fontSize: 13,
-            color: "#ffd60a", background: "rgba(255,214,10,0.08)",
-            border: "1px solid rgba(255,214,10,0.2)", borderRadius: 20,
-            padding: "6px 14px",
-          }}>74 pts ⚡</div>
-        </nav>
+          <button onClick={goBack} style={{
+            background: "rgba(255,255,255,0.04)",
+            border: "1px solid rgba(255,255,255,0.08)",
+            borderRadius: 8, padding: "7px 16px",
+            color: "#555", fontFamily: "'JetBrains Mono',monospace",
+            fontSize: 12, cursor: "pointer", letterSpacing: 1,
+          }}>← back</button>
+        </div>
 
         {/* ── PROFILE HEADER ── */}
-        <div style={{ padding: "100px 60px 0", maxWidth: 1000, margin: "0 auto" }}>
+        <div style={{ padding: "20px clamp(16px,4vw,48px) 0", maxWidth: 1000, margin: "0 auto" }}>
           <div className="fade-up" style={{
-            display: "flex", alignItems: "flex-end", gap: 32,
+            display: "flex", alignItems: "flex-end", gap: "clamp(16px,3vw,32px)",
+            flexWrap: "wrap",   // wraps on mobile so avatar stacks above text
             paddingBottom: 32,
             borderBottom: "1px solid rgba(255,255,255,0.06)",
           }}>
             <Avatar />
 
-            <div style={{ flex: 1 }}>
+            <div style={{ flex: 1, minWidth: 200 }}>
               {/* username row */}
-              <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 8 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 8, flexWrap: "wrap" }}>
                 {editMode ? (
+
                   <input
                     value={username}
                     onChange={e => setUsername(e.target.value)}
@@ -398,7 +420,7 @@ export default function Profile() {
                     <Shimmer>{username}</Shimmer>
                   </h1>
                 )}
-                <span style={{ fontSize: 22 }}>🇳🇵</span>
+                <span style={{ fontSize: 22 }}>{flag}</span>
 
                 {/* rank badge */}
                 <div style={{
@@ -429,9 +451,9 @@ export default function Profile() {
                 <div style={{ fontSize: 14, color: "#666", marginBottom: 16 }}>{bio}</div>
               )}
 
-              {/* follower counts */}
+              {/* follower counts — all start at 0 for new accounts */}
               <div style={{ display: "flex", gap: 28, marginBottom: 18 }}>
-                {[["128", "following"], ["1.4k", "followers"], ["3", "wins"], ["9", "games"]].map(([val, lbl]) => (
+                {[[following, "following"], [followers, "followers"], [wins, "wins"], [gamesPlayed, "games"]].map(([val, lbl]) => (
                   <div key={lbl}>
                     <span style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 22, color: "#f0eeea", marginRight: 4 }}>{val}</span>
                     <span style={{ fontSize: 12, color: "#555" }}>{lbl}</span>
@@ -472,7 +494,7 @@ export default function Profile() {
                 <circle cx="50" cy="50" r="42" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="6" />
                 <circle cx="50" cy="50" r="42" fill="none"
                   stroke="url(#xpGrad)" strokeWidth="6"
-                  strokeDasharray={`${2 * Math.PI * 42 * 0.74} ${2 * Math.PI * 42}`}
+                  strokeDasharray={`${2 * Math.PI * 42 * Math.min(points/100,1)} ${2 * Math.PI * 42}`}
                   strokeLinecap="round"
                 />
                 <defs>
@@ -483,7 +505,7 @@ export default function Profile() {
                 </defs>
               </svg>
               <div style={{ marginTop: -72, marginBottom: 52, textAlign: "center" }}>
-                <div style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 22, color: "#ffd60a" }}>74</div>
+                <div style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 22, color: "#ffd60a" }}>{points}</div>
                 <div style={{ fontSize: 10, color: "#444", letterSpacing: 1 }}>/ 100 XP</div>
               </div>
               <div style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 10, color: "#444", letterSpacing: 1 }}>LVL 4</div>
@@ -510,12 +532,12 @@ export default function Profile() {
           {/* ── STATS TAB ── */}
           {tab === "stats" && (
             <div>
-              {/* top 4 stat cards */}
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 16, marginBottom: 24 }}>
-                <StatCard label="Total Points" value="74"  sub="26 until reward 🎁"  color="#ffd60a" pct={74}  delay={0}    icon="⚡" />
-                <StatCard label="Games Played" value="9"   sub="avg 2m 51s per game" color="#00d4ff" pct={9}   delay={0.07} icon="🎮" />
-                <StatCard label="Total Wins"   value="3"   sub="33% win rate"        color="#00f5a0" pct={33}  delay={0.14} icon="🏆" />
-                <StatCard label="Countries"    value="6"   sub="strangers met"       color="#a78bfa" pct={60}  delay={0.21} icon="🌍" />
+              {/* top 4 stat cards — values come from props, not hardcoded */}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(140px,1fr))", gap: 16, marginBottom: 24 }}>
+                <StatCard label="Total Points" value={String(points)}  sub={`${Math.max(0,100-points)} until reward 🎁`}  color="#ffd60a" pct={Math.min(points,100)}  delay={0}    icon="⚡" />
+                <StatCard label="Games Played" value={String(gamesPlayed)}   sub="avg 2m 51s per game" color="#00d4ff" pct={Math.min(gamesPlayed*10,100)}   delay={0.07} icon="🎮" />
+                <StatCard label="Total Wins"   value={String(wins)}   sub={gamesPlayed ? `${Math.round(wins/gamesPlayed*100)}% win rate` : "play to start"}        color="#00f5a0" pct={gamesPlayed ? Math.round(wins/gamesPlayed*100) : 0}  delay={0.14} icon="🏆" />
+                <StatCard label="Countries"    value="0"   sub="strangers met"       color="#a78bfa" pct={0}  delay={0.21} icon="🌍" />
               </div>
 
               {/* game breakdown */}
@@ -564,7 +586,7 @@ export default function Profile() {
                 fontSize: 11, color: "#444", letterSpacing: 2,
                 textTransform: "uppercase", marginBottom: 20,
               }}>// {BADGES.filter(b => b.earned).length} of {BADGES.length} earned</div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(130px,1fr))", gap: 14 }}>
                 {BADGES.map((b, i) => <Badge key={b.name} {...b} delay={i * 0.06} />)}
               </div>
             </div>
@@ -580,14 +602,15 @@ export default function Profile() {
               {/* header row */}
               <div style={{
                 display: "grid",
-                gridTemplateColumns: "42px 1fr 130px 60px 70px 70px",
+                gridTemplateColumns: "42px 1fr minmax(80px,130px) 60px 70px",
                 gap: 12, padding: "12px 20px",
                 borderBottom: "1px solid rgba(255,255,255,0.05)",
                 fontFamily: "'JetBrains Mono',monospace",
                 fontSize: 11, color: "#333", letterSpacing: 2, textTransform: "uppercase",
+                overflowX: "auto",
               }}>
                 <span></span><span>Opponent</span><span>Game</span>
-                <span>Pts</span><span>Pts Δ</span><span></span>
+                <span>Pts</span><span>Pts Δ</span>
               </div>
               {MATCHES.map((m, i) => <MatchRow key={i} {...m} delay={i * 0.07} />)}
             </div>
@@ -653,39 +676,7 @@ export default function Profile() {
           )}
         </div>
 
-        {/* ── BOTTOM NAV ── */}
-        <nav style={{
-          position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 200,
-          display: "flex", justifyContent: "space-around", alignItems: "center",
-          padding: "12px 20px 20px",
-          background: "rgba(14,14,15,0.9)", backdropFilter: "blur(24px)",
-          borderTop: "1px solid rgba(255,255,255,0.06)",
-        }}>
-          {[["🏠","Home"],["🎮","Games"],null,["🏆","Ranks"],["👤","Profile"]].map((item, i) => {
-            if (!item) return (
-              <button key="fab" style={{
-                width: 60, height: 60, borderRadius: "50%",
-                background: "linear-gradient(135deg,#00f5a0,#00d4ff)",
-                border: "none", fontSize: 24, cursor: "pointer",
-                boxShadow: "0 0 30px rgba(0,245,160,0.45)",
-                marginTop: -28, animation: "glowPulse 3s infinite",
-              }}>▶</button>
-            );
-            const [icon, label] = item;
-            const active = label === "Profile";
-            return (
-              <div key={label} style={{
-                display: "flex", flexDirection: "column", alignItems: "center", gap: 3,
-                cursor: "pointer", color: active ? "#00f5a0" : "#444",
-                fontSize: 11, fontWeight: 500, padding: "6px 16px", borderRadius: 10,
-                background: active ? "rgba(0,245,160,0.06)" : "transparent",
-              }}>
-                <span style={{ fontSize: 22 }}>{icon}</span>
-                {label}
-              </div>
-            );
-          })}
-        </nav>
+        {/* Bottom nav is rendered by StrangerPlay_Main — not here */}
       </div>
     </>
   );

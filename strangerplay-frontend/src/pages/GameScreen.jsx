@@ -20,16 +20,15 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
-// import { socket } from "../socket"; // uncomment when backend ready
+import { socket } from "../socket";
 
-/* ─────────────────────────────────────────────
-   SOCKET STUB
-   When backend ready: replace socketEmit with socket.emit
-   and add socket.on listeners in useEffect
-───────────────────────────────────────────── */
-/*function socketEmit(event, data) {
-  console.log("[socket stub]", event, data);
-}*/
+function socketEmit(event, data) {
+  if (socket && socket.connected) {
+    socket.emit(event, data);
+  } else {
+    console.log("[socket stub]", event, data);
+  }
+}
 
 /* ─────────────────────────────────────────────
    CONSTANTS

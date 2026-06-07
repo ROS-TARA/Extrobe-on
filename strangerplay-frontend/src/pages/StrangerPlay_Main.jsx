@@ -4,17 +4,9 @@ import LoginSignup from "./LoginSignup";
 import GameSection from "./GameSection";
 import Rewards  from "./Rewards";
 import Settings from "./Settings";
-// In StrangerPlay_Main.jsx or GameSection.jsx
 import GameScreen from "./GameScreen";
-
-// pass props like this:
-<GameScreen
-  gameMode="dontlaugh"
-  opponent={{ name:"stranger_7829", flag:"🇧🇷", avatar:"🧑", pts:3200 }}
-  entryFee={10}
-  myPoints={74}
-  onBack={() => setPage("games")}
-/>
+// Socket singleton — one connection shared across the whole app
+import { socket } from "../socket";
 
 /* ─────────────────────────────────────────────
    GLOBAL STYLES
@@ -289,39 +281,129 @@ function useWebRTC() {
 ───────────────────────────────────────────── */
 export default function StrangerPlay() {
   const [page,       setPage]       = useState("home");
-  const [matchState, setMatchState] = useState("idle");
-  const [gameTimer,  setGameTimer]  = useState(30);
-  const [points,     setPoints]     = useState(74);
   const [reactions,  setReactions]  = useState([]);
   const [menuOpen,   setMenuOpen]   = useState(false);
 
-  const timerRef = useRef(null);
+  /* ── AUTH STATE ─────────────────────────────────────────────────────────
+     Read saved login from localStorage on first render.
+     LoginSignup writes: sp_token (JWT) and sp_user (JSON object).
+     Both survive browser refresh — that's the point of localStorage.
+  */
+  const [user, setUser] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("sp_user")) || null; }
+    catch { return null; }
+  });
+  const [points, setPoints] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("sp_user"))?.points ?? 0; }
+    catch { return 0; }
+  });
+
+  const handleLogin = (userData) => {
+    setUser(userData);
+    setPoints(userData?.points ?? 0);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem("sp_token");
+    localStorage.removeItem("sp_user");
+    setUser(null);
+    setPoints(0);
+    goTo("home");
+  };
+
+  /* ── LIVE COUNT ────────────────────────────────────────────────────────
+     Server emits "onlineCount" on every connect/disconnect.
+  */
+  const [liveCount, setLiveCount] = useState(0);
+
+  /* ── MATCHMAKING STATE ─────────────────────────────────────────────────
+     matchState: "idle" | "searching" | "found"
+     matchInfo:  the opponent data + roomId + role + entryFee from server
+     selectedGame: which game mode the user picked before searching
+  */
+  const [matchState,   setMatchState]   = useState("idle");
+  const [matchInfo,    setMatchInfo]    = useState(null);   // set when matched
+  const [selectedGame, setSelectedGame] = useState("dontlaugh");
+
+  /* ── SOCKET SETUP ──────────────────────────────────────────────────────
+     Everything socket-related lives here. We register listeners once on mount
+     and clean up on unmount. The socket connection itself is in socket.js —
+     it stays alive across page navigations (it's a module-level singleton).
+  */
+  useEffect(() => {
+    // Online count
+    socket.on("onlineCount", (n) => setLiveCount(n));
+
+    // After socket connects, if user is logged in, send JWT to server
+    // so server knows who this socket belongs to (for DB updates after match)
+    const authenticate = () => {
+      const token = localStorage.getItem("sp_token");
+      if (token) socket.emit("auth", token);
+    };
+    if (socket.connected) authenticate();
+    socket.on("connect", authenticate);
+
+    // ── MATCHMAKING EVENTS ──
+    // Server confirmed we're in queue
+    socket.on("queue:waiting", ({ position }) => {
+      console.log(`📋 in queue, position ${position}`);
+    });
+
+    // Server found us a match — this is where the magic happens
+    socket.on("match:found", (info) => {
+      // info = { roomId, role, opponent, gameMode, entryFee }
+      // Store all of this — GameScreen needs it for WebRTC + game logic
+      setMatchInfo(info);
+      setMatchState("found");
+      // Navigate to the full-screen GameScreen component
+      setPage("gamescreen");
+    });
+
+    return () => {
+      socket.off("onlineCount");
+      socket.off("connect",      authenticate);
+      socket.off("queue:waiting");
+      socket.off("match:found");
+    };
+  }, []); // eslint-disable-line
+
+  // When user state changes (login/logout), re-authenticate socket
+  useEffect(() => {
+    const token = localStorage.getItem("sp_token");
+    if (token && socket.connected) socket.emit("auth", token);
+  }, [user]);
+
   const webrtc = useWebRTC();
 
-  // game countdown
-  useEffect(() => {
-    if (matchState === "found") {
-      timerRef.current = setInterval(() => {
-        setGameTimer(t => { if (t <= 1) { clearInterval(timerRef.current); return 0; } return t - 1; });
-      }, 1000);
-    }
-    return () => clearInterval(timerRef.current);
-  }, [matchState]);
-
-  // start camera when entering play page
+  // Manage camera based on page
   useEffect(() => {
     if (page === "play") webrtc.startCamera();
     else webrtc.stopCamera();
-  }, [page]);
+  }, [page]); // eslint-disable-line
 
+  // Floating reactions on home/play pages
   const addReaction = (e) => {
     const id = Date.now();
     setReactions(r => [...r, { id, emoji: e, x: Math.random() * 80 + 10 }]);
     setTimeout(() => setReactions(r => r.filter(rx => rx.id !== id)), 2000);
-    setPoints(p => p + 1);
   };
 
   const goTo = (p) => { setPage(p); setMenuOpen(false); };
+
+  /* ── START SEARCHING ────────────────────────────────────────────────────
+     Called when user hits the big "FIND A STRANGER" button.
+     Emits queue:join → server pairs them → match:found fires → goTo("gamescreen")
+  */
+  const startSearch = (gameMode = selectedGame) => {
+    setMatchState("searching");
+    setPage("play");
+    socket.emit("queue:join", { gameMode });
+  };
+
+  const cancelSearch = () => {
+    socket.emit("queue:leave");
+    setMatchState("idle");
+  };
 
   /* ── NAV LINKS ── */
   const navLinks = ["Home","Games","Ranks","Rewards"];
@@ -361,18 +443,31 @@ export default function StrangerPlay() {
         {/* Desktop right */}
         <div className="hide-mobile" style={{ alignItems: "center", gap: 12 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, background: "rgba(255,77,109,0.08)", border: "1px solid rgba(255,77,109,0.18)", borderRadius: 20, padding: "4px 12px", fontFamily: "'JetBrains Mono',monospace", fontSize: 11, color: "#ff4d6d" }}>
-            <div style={{ width: 5, height: 5, borderRadius: "50%", background: "#ff4d6d", animation: "pulse 1.5s infinite" }} /> LIVE 2,847
+            <div style={{ width: 5, height: 5, borderRadius: "50%", background: "#ff4d6d", animation: "pulse 1.5s infinite" }} /> LIVE {liveCount.toLocaleString()}
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, background: "rgba(255,214,10,0.07)", border: "1px solid rgba(255,214,10,0.14)", borderRadius: 20, padding: "4px 12px", fontFamily: "'JetBrains Mono',monospace", fontSize: 12, color: "#ffd60a" }}>
-            <div style={{ width: 5, height: 5, borderRadius: "50%", background: "#ffd60a", animation: "pulse 2s infinite" }} /> {points} pts
-          </div>
-          <button onClick={() => goTo("login")} style={{ background: "rgba(255,255,255,0.04)", color: "#ccc", border: "1px solid rgba(255,255,255,0.09)", borderRadius: 9, padding: "8px 18px", fontFamily: "'Syne',sans-serif", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>Login</button>
-          <button onClick={() => goTo("play")} style={{ background: "linear-gradient(135deg,#00f5a0,#00d4ff)", color: "#0a0a0a", border: "none", borderRadius: 9, padding: "8px 20px", fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 13, cursor: "pointer", boxShadow: "0 0 20px rgba(0,245,160,0.3)" }}>Play Now</button>
+          {user && (
+            <div style={{ display: "flex", alignItems: "center", gap: 6, background: "rgba(255,214,10,0.07)", border: "1px solid rgba(255,214,10,0.14)", borderRadius: 20, padding: "4px 12px", fontFamily: "'JetBrains Mono',monospace", fontSize: 12, color: "#ffd60a" }}>
+              <div style={{ width: 5, height: 5, borderRadius: "50%", background: "#ffd60a", animation: "pulse 2s infinite" }} /> {points} pts
+            </div>
+          )}
+          {!user && (
+            <button onClick={() => goTo("login")} style={{ background: "rgba(255,255,255,0.04)", color: "#ccc", border: "1px solid rgba(255,255,255,0.09)", borderRadius: 9, padding: "8px 18px", fontFamily: "'Syne',sans-serif", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>Login</button>
+          )}
+          {user && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div onClick={() => goTo("profile")} style={{ display: "flex", alignItems: "center", gap: 7, background: "rgba(0,245,160,0.06)", border: "1px solid rgba(0,245,160,0.18)", borderRadius: 9, padding: "6px 14px", cursor: "pointer" }}>
+                <span style={{ fontSize: 16 }}>🧑‍💻</span>
+                <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 12, color: "#00f5a0" }}>{user.username}</span>
+              </div>
+              <button onClick={handleLogout} style={{ background: "rgba(255,77,109,0.07)", border: "1px solid rgba(255,77,109,0.18)", borderRadius: 9, padding: "6px 12px", color: "#ff4d6d", fontFamily: "'Syne',sans-serif", fontSize: 12, cursor: "pointer" }}>out</button>
+            </div>
+          )}
+          <button onClick={() => startSearch()} style={{ background: "linear-gradient(135deg,#00f5a0,#00d4ff)", color: "#0a0a0a", border: "none", borderRadius: 9, padding: "8px 20px", fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 13, cursor: "pointer", boxShadow: "0 0 20px rgba(0,245,160,0.3)" }}>Play Now</button>
         </div>
 
         {/* Mobile right */}
         <div className="show-mobile" style={{ alignItems: "center", gap: 10 }}>
-          <div style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 11, color: "#ffd60a", background: "rgba(255,214,10,0.07)", border: "1px solid rgba(255,214,10,0.14)", borderRadius: 20, padding: "4px 10px" }}>{points}pts</div>
+          {user && <div style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 11, color: "#ffd60a", background: "rgba(255,214,10,0.07)", border: "1px solid rgba(255,214,10,0.14)", borderRadius: 20, padding: "4px 10px" }}>{points}pts</div>}
           <button onClick={() => setMenuOpen(m => !m)} style={{ background: "none", border: "none", color: "#f0eeea", fontSize: 22, cursor: "pointer", padding: 4 }}>
             {menuOpen ? "✕" : "☰"}
           </button>
@@ -408,8 +503,13 @@ export default function StrangerPlay() {
             }}>{icon} {label}</button>
           ))}
           <div style={{ height: 1, background: "rgba(255,255,255,0.06)", margin: "8px 0" }} />
-          <button onClick={() => goTo("login")} style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: 10, padding: "12px 16px", color: "#ccc", fontFamily: "'Syne',sans-serif", fontWeight: 600, fontSize: 14, cursor: "pointer" }}>Login / Sign up</button>
-          <button onClick={() => goTo("play")} style={{ background: "linear-gradient(135deg,#00f5a0,#00d4ff)", border: "none", borderRadius: 10, padding: "13px 16px", color: "#0a0a0a", fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 14, cursor: "pointer", marginTop: 4 }}>▶ Play Now</button>
+          {!user && (
+            <button onClick={() => goTo("login")} style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: 10, padding: "12px 16px", color: "#ccc", fontFamily: "'Syne',sans-serif", fontWeight: 600, fontSize: 14, cursor: "pointer" }}>Login / Sign up</button>
+          )}
+          {user && (
+            <button onClick={handleLogout} style={{ background: "rgba(255,77,109,0.07)", border: "1px solid rgba(255,77,109,0.18)", borderRadius: 10, padding: "12px 16px", color: "#ff4d6d", fontFamily: "'Syne',sans-serif", fontWeight: 600, fontSize: 14, cursor: "pointer" }}>Log out ({user.username})</button>
+          )}
+          <button onClick={() => startSearch()} style={{ background: "linear-gradient(135deg,#00f5a0,#00d4ff)", border: "none", borderRadius: 10, padding: "13px 16px", color: "#0a0a0a", fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 14, cursor: "pointer", marginTop: 4 }}>▶ Play Now</button>
         </div>
       )}
 
@@ -469,20 +569,43 @@ export default function StrangerPlay() {
       )}
 
       {/* ══════════════════════════════
-          PLAY
+          PLAY — matchmaking lobby
+          States: idle | searching
+          (found state navigates to "gamescreen" immediately)
       ══════════════════════════════ */}
       {page === "play" && (
         <div style={{ position: "relative", zIndex: 1, paddingTop: 64, minHeight: "100vh" }}>
 
-          {/* ── IDLE ── */}
+          {/* ── IDLE — pick game + find match ── */}
           {matchState === "idle" && (
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "calc(100vh - 64px)", gap: 28, padding: "40px 20px" }}>
+              <div style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 10, color: "#444", letterSpacing: 4, textTransform: "uppercase" }}>// pick your game, then find a stranger</div>
               <h1 style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: "clamp(40px,8vw,64px)", letterSpacing: 3, textAlign: "center" }}>READY TO <ShimmerText>PLAY?</ShimmerText></h1>
-              <p style={{ color: "#555", fontSize: 14 }}>2,847 strangers waiting</p>
 
-              {/* Camera preview before match */}
+              {/* Game mode picker */}
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "center", maxWidth: 640 }}>
+                {[
+                  { id:"dontlaugh", emoji:"😐", label:"Don't Laugh",  color:"#00f5a0" },
+                  { id:"vibecheck", emoji:"🎭", label:"Vibe Check",   color:"#ff4d6d" },
+                  { id:"mirrorme",  emoji:"🪞", label:"Mirror Me",    color:"#00d4ff" },
+                  { id:"hottake",   emoji:"🌶️", label:"Hot Take",    color:"#ffd60a" },
+                ].map(g => (
+                  <button key={g.id} onClick={() => setSelectedGame(g.id)} style={{
+                    background: selectedGame === g.id ? `${g.color}18` : "rgba(255,255,255,0.03)",
+                    border: `1px solid ${selectedGame === g.id ? g.color+"55" : "rgba(255,255,255,0.08)"}`,
+                    borderRadius: 12, padding: "10px 18px", cursor: "pointer",
+                    color: selectedGame === g.id ? g.color : "#555",
+                    fontFamily: "'Syne',sans-serif", fontWeight: 600, fontSize: 13,
+                    transition: "all 0.2s", display: "flex", alignItems: "center", gap: 7,
+                  }}>
+                    <span>{g.emoji}</span> {g.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Camera preview */}
               {webrtc.stream && (
-                <div style={{ width: "min(260px,70vw)", aspectRatio: "3/4", borderRadius: 16, overflow: "hidden", border: "2px solid rgba(0,245,160,0.3)", background: "#0a0a0b", boxShadow: "0 0 30px rgba(0,245,160,0.15)" }}>
+                <div style={{ width: "min(200px,55vw)", aspectRatio: "3/4", borderRadius: 14, overflow: "hidden", border: "2px solid rgba(0,245,160,0.3)", background: "#0a0a0b", boxShadow: "0 0 30px rgba(0,245,160,0.12)" }}>
                   <video ref={webrtc.localRef} autoPlay muted playsInline style={{ width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)" }} />
                 </div>
               )}
@@ -490,125 +613,32 @@ export default function StrangerPlay() {
                 <div style={{ background: "rgba(255,77,109,0.08)", border: "1px solid rgba(255,77,109,0.2)", borderRadius: 12, padding: "12px 20px", fontSize: 13, color: "#ff4d6d", maxWidth: 340, textAlign: "center" }}>{webrtc.camErr}</div>
               )}
 
-              <button onClick={() => setMatchState("searching")} style={{ width: "clamp(130px,35vw,160px)", height: "clamp(130px,35vw,160px)", borderRadius: "50%", background: "linear-gradient(135deg,#00f5a0,#00d4ff)", border: "none", cursor: "pointer", fontFamily: "'Bebas Neue',sans-serif", fontSize: "clamp(16px,3.5vw,20px)", letterSpacing: 2, color: "#0a0a0a", boxShadow: "0 0 60px rgba(0,245,160,0.5)", animation: "glowPulse 2s infinite" }}>
+              {/* Big find button */}
+              <button onClick={() => startSearch(selectedGame)} style={{ width: "clamp(130px,35vw,160px)", height: "clamp(130px,35vw,160px)", borderRadius: "50%", background: "linear-gradient(135deg,#00f5a0,#00d4ff)", border: "none", cursor: "pointer", fontFamily: "'Bebas Neue',sans-serif", fontSize: "clamp(15px,3vw,19px)", letterSpacing: 2, color: "#0a0a0a", boxShadow: "0 0 60px rgba(0,245,160,0.5)", animation: "glowPulse 2s infinite" }}>
                 FIND A<br />STRANGER
               </button>
+
+              <div style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 11, color: "#333" }}>
+                {liveCount.toLocaleString()} online · {liveCount === 0 ? "start the server first" : "someone is waiting"}
+              </div>
             </div>
           )}
 
           {/* ── SEARCHING ── */}
           {matchState === "searching" && (
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "calc(100vh - 64px)", gap: 24, padding: "40px 20px" }}>
+              {/* Spinning rings */}
               <div style={{ position: "relative", width: 180, height: 180 }}>
                 <div style={{ position: "absolute", inset: 0, borderRadius: "50%", border: "2px solid transparent", borderTopColor: "#00f5a0", borderRightColor: "#00d4ff", animation: "spinRing 1s linear infinite" }} />
                 <div style={{ position: "absolute", inset: 14, borderRadius: "50%", border: "1px solid transparent", borderTopColor: "#ff4d6d", animation: "spinRing 1.5s linear infinite reverse" }} />
                 <div style={{ position: "absolute", inset: 28, borderRadius: "50%", background: "rgba(0,245,160,0.04)", border: "1px solid rgba(0,245,160,0.1)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'JetBrains Mono',monospace", fontSize: 11, color: "#00f5a0", letterSpacing: 1 }}>SCAN</div>
               </div>
               <div style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: "clamp(28px,5vw,40px)", letterSpacing: 3, textAlign: "center" }}>FINDING YOUR <ShimmerText>MATCH</ShimmerText></div>
-              <p style={{ color: "#555", fontFamily: "'JetBrains Mono',monospace", fontSize: 12 }}>scanning 2,847 players...</p>
-              <button onClick={() => { setMatchState("found"); setGameTimer(30); }} style={{ background: "rgba(0,245,160,0.08)", border: "1px solid rgba(0,245,160,0.18)", color: "#00f5a0", borderRadius: 10, padding: "10px 24px", fontFamily: "'Syne',sans-serif", fontSize: 13, cursor: "pointer" }}>Simulate Match →</button>
-            </div>
-          )}
-
-          {/* ── IN CALL ── */}
-          {matchState === "found" && (
-            <div style={{ padding: "clamp(8px,2vw,16px) clamp(8px,2vw,20px) 100px", maxWidth: 1360, margin: "0 auto" }}>
-              <div className="call-grid" style={{ display: "grid", gridTemplateColumns: "1fr 280px", gap: 12, marginBottom: 12 }}>
-
-                {/* VIDEO */}
-                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  <div style={{ position: "relative", aspectRatio: "16/9", background: "#0a0a0b", borderRadius: 16, border: "1px solid rgba(255,255,255,0.06)", overflow: "hidden", animation: "borderGlow 4s infinite" }}>
-
-                    {/* Scanline */}
-                    <div style={{ position: "absolute", left: 0, right: 0, height: 2, background: "linear-gradient(90deg,transparent,rgba(0,245,160,0.25),transparent)", animation: "scanline 3s linear infinite", zIndex: 3, pointerEvents: "none" }} />
-
-                    {/* Stranger video (placeholder — in prod this is remoteStream) */}
-                    <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "radial-gradient(ellipse at 40% 40%,rgba(0,245,160,0.03),transparent 60%)" }}>
-                      <div style={{ textAlign: "center" }}>
-                        <div style={{ width: 72, height: 72, borderRadius: "50%", background: "rgba(255,255,255,0.04)", border: "2px solid rgba(255,255,255,0.07)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 32, margin: "0 auto 12px" }}>🧑</div>
-                        <div style={{ color: "#00f5a0", fontFamily: "'JetBrains Mono',monospace", fontSize: 12 }}>stranger_7829 🇧🇷</div>
-                        <div style={{ color: "#444", fontSize: 11, marginTop: 4 }}>waiting for WebRTC peer...</div>
-                      </div>
-                    </div>
-
-                    {/* Game info overlay */}
-                    <div style={{ position: "absolute", top: 12, left: 12, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(12px)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 10, padding: "8px 14px", display: "flex", alignItems: "center", gap: 10, zIndex: 4 }}>
-                      <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 10, color: "#00f5a0", letterSpacing: 2 }}>😐 DON'T LAUGH</span>
-                      <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.1)" }} />
-                      <span style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 24, color: gameTimer < 10 ? "#ff4d6d" : "#f0eeea", textShadow: gameTimer < 10 ? "0 0 16px #ff4d6d" : "none", transition: "color 0.3s" }}>0:{String(gameTimer).padStart(2, "0")}</span>
-                    </div>
-
-                    {/* Points badge */}
-                    <div style={{ position: "absolute", top: 12, right: 12, background: "rgba(255,214,10,0.09)", border: "1px solid rgba(255,214,10,0.18)", borderRadius: 8, padding: "6px 12px", zIndex: 4, fontFamily: "'JetBrains Mono',monospace", fontSize: 11, color: "#ffd60a" }}>+10 pts</div>
-
-                    {/* Self cam — real video */}
-                    <div style={{ position: "absolute", bottom: 12, right: 12, width: "clamp(80px,16%,130px)", aspectRatio: "3/4", background: "#1a1a1c", borderRadius: 10, border: "2px solid #00f5a0", boxShadow: "0 0 16px rgba(0,245,160,0.2)", overflow: "hidden", zIndex: 4 }}>
-                      {webrtc.stream && !webrtc.camOff
-                        ? <video ref={webrtc.localRef} autoPlay muted playsInline style={{ width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)" }} />
-                        : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "#333", fontSize: 22 }}>📷</div>
-                      }
-                    </div>
-
-                    {/* Floating reactions */}
-                    {reactions.map(r => (
-                      <div key={r.id} style={{ position: "absolute", bottom: "28%", left: `${r.x}%`, fontSize: 26, animation: "floatUp 2s forwards", zIndex: 5, pointerEvents: "none" }}>{r.emoji}</div>
-                    ))}
-                  </div>
-
-                  {/* Controls */}
-                  <div className="ctrl-bar" style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, padding: "14px 20px", background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.05)", borderRadius: 14 }}>
-                    <button onClick={webrtc.toggleMute} style={{ width: 48, height: 48, borderRadius: "50%", background: webrtc.muted ? "rgba(255,77,109,0.15)" : "rgba(255,255,255,0.05)", border: `1px solid ${webrtc.muted ? "rgba(255,77,109,0.3)" : "rgba(255,255,255,0.08)"}`, color: "#f0eeea", fontSize: 18, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.2s" }} title={webrtc.muted ? "Unmute" : "Mute"}>
-                      {webrtc.muted ? "🔇" : "🎤"}
-                    </button>
-                    <button onClick={webrtc.toggleCam} style={{ width: 48, height: 48, borderRadius: "50%", background: webrtc.camOff ? "rgba(255,77,109,0.15)" : "rgba(255,255,255,0.05)", border: `1px solid ${webrtc.camOff ? "rgba(255,77,109,0.3)" : "rgba(255,255,255,0.08)"}`, color: "#f0eeea", fontSize: 18, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.2s" }} title={webrtc.camOff ? "Turn on cam" : "Turn off cam"}>
-                      {webrtc.camOff ? "🚫" : "📷"}
-                    </button>
-                    <button style={{ width: 48, height: 48, borderRadius: "50%", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: "#f0eeea", fontSize: 18, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>✨</button>
-                    <button onClick={() => { webrtc.stopCamera(); setMatchState("idle"); }} style={{ width: 56, height: 56, borderRadius: "50%", background: "#ff4d6d", border: "none", fontSize: 20, cursor: "pointer", boxShadow: "0 0 20px rgba(255,77,109,0.45)" }}>📵</button>
-                    <button style={{ width: 48, height: 48, borderRadius: "50%", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: "#f0eeea", fontSize: 18, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>🚩</button>
-                    <button onClick={() => { setMatchState("searching"); setTimeout(() => { setMatchState("found"); setGameTimer(30); }, 1200); }} style={{ background: "linear-gradient(135deg,#00f5a0,#00d4ff)", border: "none", borderRadius: 10, color: "#0a0a0a", fontFamily: "'Bebas Neue',sans-serif", fontSize: "clamp(13px,2vw,16px)", letterSpacing: 1.5, padding: "0 20px", height: 48, cursor: "pointer", boxShadow: "0 0 16px rgba(0,245,160,0.3)", whiteSpace: "nowrap" }}>NEXT →</button>
-                  </div>
-                </div>
-
-                {/* SIDEBAR */}
-                <div className="sidebar" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  {/* Points */}
-                  <div style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 14, padding: 16 }}>
-                    <div style={{ fontSize: 10, color: "#555", letterSpacing: 2, textTransform: "uppercase", marginBottom: 12 }}>Points</div>
-                    <div style={{ display: "flex", alignItems: "baseline", gap: 4, marginBottom: 12 }}>
-                      <span style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: "clamp(40px,6vw,52px)", color: "#ffd60a", textShadow: "0 0 24px rgba(255,214,10,0.35)", lineHeight: 1 }}>{points}</span>
-                      <span style={{ color: "#444", fontSize: 12 }}>/ 100</span>
-                    </div>
-                    <div style={{ background: "rgba(255,255,255,0.05)", borderRadius: 4, height: 5, overflow: "hidden", marginBottom: 8 }}>
-                      <div style={{ height: "100%", width: `${points}%`, background: "linear-gradient(90deg,#ffd60a,#ff9f43)", borderRadius: 4, transition: "width 0.5s" }} />
-                    </div>
-                    <div style={{ fontSize: 11, color: "#555" }}><span style={{ color: "#ffd60a" }}>{100 - points} pts</span> to reward 🎁</div>
-                  </div>
-
-                  {/* Crowd */}
-                  <div style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 14, padding: 16, flex: 1 }}>
-                    <div style={{ fontSize: 10, color: "#555", letterSpacing: 2, textTransform: "uppercase", marginBottom: 14 }}>👀 Watching (128)</div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
-                      {[["🧑","alex_k","🇺🇸","#00f5a0"],["👩","priya_s","🇮🇳","#00d4ff"],["🧔","marco_r","🇧🇷","#ff4d6d"],["👦","raj_np","🇳🇵","#ffd60a"]].map(([av,n,f,c]) => (
-                        <div key={n} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                          <div style={{ width: 26, height: 26, borderRadius: "50%", background: `${c}12`, border: `1px solid ${c}28`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, flexShrink: 0 }}>{av}</div>
-                          <span style={{ fontSize: 12, flex: 1 }}>{n}</span>
-                          <span style={{ fontSize: 13 }}>{f}</span>
-                        </div>
-                      ))}
-                    </div>
-                    <div style={{ fontSize: 11, color: "#444", textAlign: "center", marginBottom: 12 }}>+ 124 more</div>
-                    <div style={{ display: "flex", justifyContent: "space-between" }}>
-                      {["😂","🔥","😮","👏","💀"].map(e => (
-                        <button key={e} onClick={() => addReaction(e)} style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 7, padding: "7px 8px", fontSize: 16, cursor: "pointer", transition: "transform 0.15s" }}
-                          onMouseEnter={ev => ev.currentTarget.style.transform = "scale(1.25)"}
-                          onMouseLeave={ev => ev.currentTarget.style.transform = "scale(1)"}
-                        >{e}</button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </div>
+              <p style={{ color: "#555", fontFamily: "'JetBrains Mono',monospace", fontSize: 12 }}>
+                scanning {liveCount.toLocaleString()} players...
+              </p>
+              {/* Cancel button */}
+              <button onClick={() => { cancelSearch(); setPage("play"); }} style={{ background: "rgba(255,77,109,0.08)", border: "1px solid rgba(255,77,109,0.18)", color: "#ff4d6d", borderRadius: 10, padding: "10px 24px", fontFamily: "'Syne',sans-serif", fontSize: 13, cursor: "pointer" }}>Cancel</button>
             </div>
           )}
         </div>
@@ -665,8 +695,11 @@ export default function StrangerPlay() {
       )}
 
       {/* ══════════════════════════════
-          BOTTOM NAV
+          BOTTOM NAV — only on main pages
+          Hidden on: login, profile, rewards, settings, games, gamescreen
+          because those pages are full-screen components
       ══════════════════════════════ */}
+      {["home","play","ranks"].includes(page) && (
       <nav style={{
         position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 300,
         display: "flex", justifyContent: "space-around", alignItems: "center",
@@ -688,6 +721,7 @@ export default function StrangerPlay() {
           );
         })}
       </nav>
+      )}
     </div>
   );
 }

@@ -49,8 +49,32 @@ const io     = new Server(server, {
 });
 
 // ── Middleware ────────────────────────────────
-app.use(cors({ origin: process.env.FRONTEND_URL || "http://localhost:5173" }));
-app.use(express.json()); // parse JSON request bodies
+/*
+  CORS FIX: During development Vite can run on 5173, 5174, 5175 etc.
+  We allow any localhost so the browser never silently blocks the request.
+  On production (Render), FRONTEND_URL is set to your exact Vercel URL.
+*/
+const allowedOrigins = [
+  process.env.FRONTEND_URL,
+  "http://localhost:5173",
+  "http://localhost:5174",
+  "http://localhost:5175",
+  "http://127.0.0.1:5173",
+  "http://127.0.0.1:5174",
+].filter(Boolean);
+
+app.use(cors({
+  origin: (origin, cb) => {
+    // Allow requests with no origin (Postman, curl, mobile)
+    if (!origin) return cb(null, true);
+    if (allowedOrigins.includes(origin) || origin.startsWith("http://localhost")) {
+      return cb(null, true);
+    }
+    return cb(null, false);
+  },
+  credentials: true,
+}));
+app.use(express.json());
 
 // ── MongoDB connection ────────────────────────
 /*
@@ -61,9 +85,15 @@ app.use(express.json()); // parse JSON request bodies
   Your .env file needs: MONGO_URI=mongodb+srv://...
   Get this from MongoDB Atlas → Connect → Drivers
 */
-mongoose.connect(process.env.MONGO_URI || "mongodb://localhost:27017/strangerplay")
-  .then(() => console.log("✅ MongoDB connected"))
-  .catch(err => console.error("❌ MongoDB error:", err.message));
+const MONGO_URI =
+  process.env.MONGO_URI || "mongodb://127.0.0.1:27017/strangerplay";
+
+mongoose.connect(MONGO_URI)
+  .then(() => console.log("✅ MongoDB connected successfully"))
+  .catch((err) => {
+    console.error("❌ MongoDB connection failed:", err.message);
+    process.exit(1);
+  });
 
 // ════════════════════════════════════════════════
 // MODELS (Mongoose schemas)
@@ -241,8 +271,7 @@ app.post("/api/auth/signup", async (req, res) => {
     }
     if (password.length < 8) {
       return res.status(400).json({ error: "Password must be at least 8 characters" });
-    }
-    if (username.length < 2 || username.length > 30) {
+    }    if (username.length < 2 || username.length > 30) {
       return res.status(400).json({ error: "Username must be 2–30 characters" });
     }
 
@@ -254,7 +283,10 @@ app.post("/api/auth/signup", async (req, res) => {
     }
 
     // Hash password
-    const hashed = await bcrypt.hash(password, 12);
+    // TEACH: bcrypt rounds = how many times the hash is computed.
+    // 12 rounds = ~3-4 seconds (causes your "loading" delay).
+    // 10 rounds = ~200ms. Still very secure. Use 12 only on production.
+    const hashed = await bcrypt.hash(password, 10);
 
     // Create user
     const user = await User.create({

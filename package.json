@@ -15,5 +15,8 @@
   "bugs": {
     "url": "https://github.com/ROS-TARA/Extrobe-on/issues"
   },
-  "homepage": "https://github.com/ROS-TARA/Extrobe-on#readme"
+  "homepage": "https://github.com/ROS-TARA/Extrobe-on#readme",
+  "dependencies": {
+    "express": "^5.2.1"
+  }
 }
