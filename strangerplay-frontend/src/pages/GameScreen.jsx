@@ -1,34 +1,32 @@
 /**
  * GameScreen.jsx — StrangerPlay
  *
- * Full live in-match UI for 4 game modes:
- *   Don't Laugh · Vibe Check · Mirror Me · Hot Take
+ * TWO COMPLETELY DIFFERENT LAYOUTS:
  *
- * Architecture:
- *   - BlazeFace runs in setInterval (async, 33ms) → writes to faceTrack ref
- *   - rAF renderLoop reads faceTrack synchronously → draws overlay canvas
- *   - NEVER mix await inside rAF (learned from GameSection bug)
- *   - Socket calls are stubbed via socketEmit() — plug real socket later
- *   - Round system: best of 3, phases: intro → playing → roundResult → matchResult
+ * 1. PLAYER layout  (isPlayer=true, default)
+ *    — You are IN the game
+ *    — Fullscreen: opponent fills the whole screen, YOUR cam is big (not tiny PIP)
+ *    — Bottom control bar with mute/cam/hang-up
+ *    — Game prompts overlay at bottom
+ *    — Score bar at top, timer in center
+ *    — Mobile: vertical stack, both cams 50/50 height
  *
- * Props:
- *   gameMode   — "dontlaugh" | "vibecheck" | "mirrorme" | "hottake"
- *   opponent   — { name, flag, avatar, pts }
- *   entryFee   — number (points wagered)
- *   myPoints   — number
- *   onBack     — function
+ * 2. SPECTATOR layout (isPlayer=false)
+ *    — You are WATCHING two strangers play
+ *    — TikTok-style: both players side by side, equal width
+ *    — Right panel: live reaction bar + emoji buttons
+ *    — Left panel: scrolling chat / crowd comments
+ *    — Score ticker at top like a sports broadcast
+ *    — No controls. No camera access. Pure viewer experience.
+ *
+ * Architecture rules (never break):
+ *   - NEVER put await inside requestAnimationFrame
+ *   - setInterval(async) writes to ref → rAF reads ref synchronously
+ *   - canvas.width must be set from getBoundingClientRect(), not CSS
  */
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import { socket } from "../socket";
-
-function socketEmit(event, data) {
-  if (socket && socket.connected) {
-    socket.emit(event, data);
-  } else {
-    console.log("[socket stub]", event, data);
-  }
-}
 
 /* ─────────────────────────────────────────────
    CONSTANTS
@@ -51,9 +49,9 @@ const CDN_BLAZE = "https://cdn.jsdelivr.net/npm/@tensorflow-models/blazeface@0.1
 ───────────────────────────────────────────── */
 const MODES = {
   dontlaugh: {
-    label: "Don't Laugh", emoji: "😐", color: "#00f5a0", duration: 20,
-    desc: "Keep a straight face. Smile = you lose the round.",
-    prompts: [
+    label:"Don't Laugh", emoji:"😐", color:"#00f5a0", duration:20,
+    desc:"Keep a straight face. Smile = you lose the round.",
+    prompts:[
       "Imagine your grandma doing the floss dance",
       "A cat slowly falling off a table in slow motion",
       "Your teacher trying to use TikTok for the first time",
@@ -62,9 +60,9 @@ const MODES = {
     ],
   },
   vibecheck: {
-    label: "Vibe Check", emoji: "🎭", color: "#ff4d6d", duration: 15,
-    desc: "Act out the vibe. Crowd votes who nailed it.",
-    prompts: [
+    label:"Vibe Check", emoji:"🎭", color:"#ff4d6d", duration:15,
+    desc:"Act out the vibe. Crowd votes who nailed it.",
+    prompts:[
       "You just won the lottery but you're trying to act normal",
       "You are a robot that just discovered human emotions",
       "You are a very dramatic grandma at a soap opera funeral",
@@ -73,9 +71,9 @@ const MODES = {
     ],
   },
   mirrorme: {
-    label: "Mirror Me", emoji: "🪞", color: "#00d4ff", duration: 10,
-    desc: "Copy the pose exactly. AI scores your accuracy.",
-    poses: [
+    label:"Mirror Me", emoji:"🪞", color:"#00d4ff", duration:10,
+    desc:"Copy the pose exactly. AI scores your accuracy.",
+    poses:[
       "Raise both eyebrows as high as humanly possible",
       "Puff out your cheeks like a balloon about to pop",
       "Make the most confused face you have ever made",
@@ -84,9 +82,9 @@ const MODES = {
     ],
   },
   hottake: {
-    label: "Hot Take", emoji: "🌶️", color: "#ffd60a", duration: 15,
-    desc: "React to the take in 5 seconds. Crowd picks best reaction.",
-    prompts: [
+    label:"Hot Take", emoji:"🌶️", color:"#ffd60a", duration:15,
+    desc:"React to the take in 5 seconds. Crowd picks best reaction.",
+    prompts:[
       "Pineapple on pizza is actually really good",
       "Sleeping is a complete waste of time",
       "Cats are objectively better than dogs",
@@ -108,27 +106,21 @@ function loadScript(src) {
   });
 }
 
-// Estimate mouth openness from BlazeFace landmarks
-// landmarks[2] = nose tip, landmarks[3] = mouth center
 function getMouthOpenness(lm) {
   if (!lm || lm.length < 4) return 0;
-  const nose  = lm[2];
-  const mouth = lm[3];
-  const eyeL  = lm[1];
+  const nose = lm[2], mouth = lm[3], eyeL = lm[1];
   const faceH = Math.abs(eyeL[1] - mouth[1]) || 1;
   return Math.abs(mouth[1] - nose[1]) / faceH;
 }
 
-// Mirror Me accuracy score 0-100
 function mirrorScore(lm1, lm2) {
   if (!lm1 || !lm2 || lm1.length < 4) return 50;
   let diff = 0;
   for (let i = 0; i < Math.min(lm1.length, lm2.length); i++) {
-    const dx = lm1[i][0] - lm2[i][0];
-    const dy = lm1[i][1] - lm2[i][1];
-    diff += Math.sqrt(dx * dx + dy * dy);
+    const dx = lm1[i][0]-lm2[i][0], dy = lm1[i][1]-lm2[i][1];
+    diff += Math.sqrt(dx*dx+dy*dy);
   }
-  return Math.max(0, Math.round(100 - diff / 2));
+  return Math.max(0, Math.round(100 - diff/2));
 }
 
 function getRank(pts) {
@@ -148,63 +140,41 @@ function rankColor(pts) {
 }
 
 /* ─────────────────────────────────────────────
-   CSS
-───────────────────────────────────────────── */
-const CSS = `
-@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Syne:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
-*{box-sizing:border-box;margin:0;padding:0;}
-::-webkit-scrollbar{width:4px}
-::-webkit-scrollbar-thumb{background:rgba(255,255,255,.08);border-radius:2px}
-@keyframes fadeUp   {from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
-@keyframes fadeIn   {from{opacity:0}to{opacity:1}}
-@keyframes pulse    {0%,100%{opacity:1}50%{opacity:.35}}
-@keyframes glowP    {0%,100%{box-shadow:0 0 20px #00f5a044}50%{box-shadow:0 0 50px #00f5a099}}
-@keyframes spinRing {to{transform:rotate(360deg)}}
-@keyframes floatUp  {0%{opacity:1;transform:translateY(0)}100%{opacity:0;transform:translateY(-80px)}}
-@keyframes timerTick{0%{transform:scale(1.15)}100%{transform:scale(1)}}
-@keyframes slideIn  {from{opacity:0;transform:translateX(-10px)}to{opacity:1;transform:translateX(0)}}
-@keyframes winPop   {0%{transform:scale(0.5);opacity:0}60%{transform:scale(1.1)}100%{transform:scale(1);opacity:1}}
-@keyframes smileWarn{0%,100%{opacity:1}50%{opacity:0.15}}
-@keyframes voteGrow {from{width:0}to{width:var(--w)}}
-`;
-
-/* ─────────────────────────────────────────────
    SMALL COMPONENTS
 ───────────────────────────────────────────── */
-
 function RoundDots({ total, scores }) {
   return (
-    <div style={{ display: "flex", gap: 7, alignItems: "center" }}>
-      {Array.from({ length: total }).map((_, i) => {
+    <div style={{ display:"flex", gap:7, alignItems:"center" }}>
+      {Array.from({length:total}).map((_,i) => {
         const s = scores[i];
-        const col = s === "win" ? "#00f5a0" : s === "loss" ? "#ff4d6d" : "rgba(255,255,255,0.1)";
-        return <div key={i} style={{ width: 9, height: 9, borderRadius: "50%", background: col, boxShadow: s ? `0 0 7px ${col}` : "none", transition: "all 0.3s" }} />;
+        const col = s==="win"?"#00f5a0":s==="loss"?"#ff4d6d":"rgba(255,255,255,0.1)";
+        return <div key={i} style={{ width:9, height:9, borderRadius:"50%", background:col, boxShadow:s?`0 0 7px ${col}`:"none", transition:"all 0.3s" }} />;
       })}
     </div>
   );
 }
 
 function TimerRing({ seconds, total, color }) {
-  const r = 26, circ = 2 * Math.PI * r;
+  const r = 26, circ = 2*Math.PI*r;
   const danger = seconds <= 5;
   return (
-    <div style={{ position: "relative", width: 70, height: 70, flexShrink: 0 }}>
-      <svg width="70" height="70" style={{ transform: "rotate(-90deg)" }}>
+    <div style={{ position:"relative", width:70, height:70, flexShrink:0 }}>
+      <svg width="70" height="70" style={{ transform:"rotate(-90deg)" }}>
         <circle cx="35" cy="35" r={r} fill="none" stroke="rgba(255,255,255,0.07)" strokeWidth="3" />
         <circle cx="35" cy="35" r={r} fill="none"
-          stroke={danger ? "#ff4d6d" : color} strokeWidth="3"
+          stroke={danger?"#ff4d6d":color} strokeWidth="3"
           strokeDasharray={circ}
-          strokeDashoffset={circ - circ * (seconds / total)}
+          strokeDashoffset={circ - circ*(seconds/total)}
           strokeLinecap="round"
-          style={{ transition: "stroke-dashoffset 1s linear, stroke 0.3s" }}
+          style={{ transition:"stroke-dashoffset 1s linear, stroke 0.3s" }}
         />
       </svg>
       <div style={{
-        position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
-        fontFamily: "'Bebas Neue',sans-serif", fontSize: 22,
-        color: danger ? "#ff4d6d" : "#f0eeea",
-        textShadow: danger ? "0 0 10px rgba(255,77,109,0.7)" : "none",
-        animation: danger ? "timerTick 1s infinite" : "none",
+        position:"absolute", inset:0, display:"flex", alignItems:"center", justifyContent:"center",
+        fontFamily:"'Bebas Neue',sans-serif", fontSize:22,
+        color:danger?"#ff4d6d":"#f0eeea",
+        textShadow:danger?"0 0 10px rgba(255,77,109,0.7)":"none",
+        animation:danger?"timerTick 1s infinite":"none",
       }}>{seconds}</div>
     </div>
   );
@@ -212,17 +182,17 @@ function TimerRing({ seconds, total, color }) {
 
 function VoteBar({ label, pct, color, isMe }) {
   return (
-    <div style={{ marginBottom: 10 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 5, color: isMe ? color : "#555" }}>
+    <div style={{ marginBottom:10 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:5, color:isMe?color:"#555" }}>
         <span>{label}</span>
-        <span style={{ fontFamily: "'JetBrains Mono',monospace" }}>{Math.round(pct)}%</span>
+        <span style={{ fontFamily:"'JetBrains Mono',monospace" }}>{Math.round(pct)}%</span>
       </div>
-      <div style={{ background: "rgba(255,255,255,0.06)", borderRadius: 4, height: 8, overflow: "hidden" }}>
+      <div style={{ background:"rgba(255,255,255,0.06)", borderRadius:4, height:8, overflow:"hidden" }}>
         <div style={{
-          height: "100%", borderRadius: 4, width: `${pct}%`,
-          background: `linear-gradient(90deg,${color},${color}88)`,
-          boxShadow: isMe ? `0 0 10px ${color}55` : "none",
-          "--w": `${pct}%`, animation: "voteGrow 1.2s cubic-bezier(0.34,1.56,0.64,1) both",
+          height:"100%", borderRadius:4, width:`${pct}%`,
+          background:`linear-gradient(90deg,${color},${color}88)`,
+          boxShadow:isMe?`0 0 10px ${color}55`:"none",
+          transition:"width 0.8s ease",
         }} />
       </div>
     </div>
@@ -230,75 +200,428 @@ function VoteBar({ label, pct, color, isMe }) {
 }
 
 /* ─────────────────────────────────────────────
-   MAIN COMPONENT
+   CSS
+───────────────────────────────────────────── */
+const CSS = `
+@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Syne:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
+*{box-sizing:border-box;margin:0;padding:0;}
+::-webkit-scrollbar{width:4px}
+::-webkit-scrollbar-thumb{background:rgba(255,255,255,.08);border-radius:2px}
+@keyframes fadeUp    {from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
+@keyframes fadeIn    {from{opacity:0}to{opacity:1}}
+@keyframes pulse     {0%,100%{opacity:1}50%{opacity:.35}}
+@keyframes glowP     {0%,100%{box-shadow:0 0 20px #00f5a044}50%{box-shadow:0 0 50px #00f5a099}}
+@keyframes spinRing  {to{transform:rotate(360deg)}}
+@keyframes floatUp   {0%{opacity:1;transform:translateY(0)}100%{opacity:0;transform:translateY(-100px)}}
+@keyframes timerTick {0%{transform:scale(1.15)}100%{transform:scale(1)}}
+@keyframes winPop    {0%{transform:scale(0.5);opacity:0}60%{transform:scale(1.1)}100%{transform:scale(1);opacity:1}}
+@keyframes smileWarn {0%,100%{opacity:1}50%{opacity:0.15}}
+@keyframes chatSlide {from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes livePing  {0%{transform:scale(1)}50%{transform:scale(1.4)}100%{transform:scale(1)}}
+@keyframes scoreFlash{0%{color:#ffd60a;transform:scale(1.3)}100%{color:inherit;transform:scale(1)}}
+
+/* Player layout — cams stack on mobile */
+.player-grid {
+  display: grid;
+  grid-template-rows: 1fr 1fr;
+  height: calc(100vh - 58px);
+}
+@media(min-width:640px){
+  .player-grid {
+    grid-template-rows: 1fr;
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+/* Spectator layout — side by side always, reaction panel on right */
+.spectator-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 52px;
+  height: calc(100vh - 58px);
+}
+@media(max-width:600px){
+  .spectator-grid {
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr auto;
+  }
+  .spec-right { display: none; }
+}
+`;
+
+/* ─────────────────────────────────────────────
+   SPECTATOR VIEW
+   Completely separate component — no camera,
+   no game logic, pure watching experience
+───────────────────────────────────────────── */
+function SpectatorView({ gameMode, player1, player2, onBack }) {
+  const mode = MODES[gameMode] || MODES.dontlaugh;
+
+  // Fake scores for demo — in production these come via socket broadcast
+  const [score1, setScore1] = useState(0);
+  const [score2, setScore2] = useState(0);
+  const [timer,  setTimer]  = useState(mode.duration);
+  const [round,  setRound]  = useState(1);
+
+  // Reactions that float up on screen
+  const [reactions, setReactions] = useState([]);
+
+  // Live chat messages — in production come via socket
+  const [chat, setChat] = useState([
+    { id:1, user:"alex_k",   flag:"🇺🇸", msg:"this is hilarious 😂",      color:"#00f5a0" },
+    { id:2, user:"priya_s",  flag:"🇮🇳", msg:"left guy is cracking",       color:"#00d4ff" },
+    { id:3, user:"marco_r",  flag:"🇧🇷", msg:"no way he holds it 💀",      color:"#ff4d6d" },
+    { id:4, user:"dragonz",  flag:"🇨🇳", msg:"LMAOOO",                     color:"#ffd60a" },
+    { id:5, user:"nite_owl", flag:"🇬🇧", msg:"right guy looking nervous",   color:"#a78bfa" },
+  ]);
+  const chatRef = useRef(null);
+
+  // Countdown timer for display
+  useEffect(() => {
+    const iv = setInterval(() => {
+      setTimer(t => {
+        if (t <= 1) { clearInterval(iv); return 0; }
+        return t - 1;
+      });
+    }, 1000);
+    return () => clearInterval(iv);
+  }, [round]);
+
+  // Fake chat messages rolling in — in prod these are socket events
+  useEffect(() => {
+    const msgs = [
+      { user:"fan_99",   flag:"🇰🇷", msg:"he's gonna smile any second",  color:"#00f5a0" },
+      { user:"watcher",  flag:"🇩🇪", msg:"😂😂😂",                         color:"#ff4d6d" },
+      { user:"lurk3r",   flag:"🇯🇵", msg:"10 points on right guy",        color:"#ffd60a" },
+      { user:"spectate", flag:"🇳🇵", msg:"this is StrangerPlay at its best", color:"#00d4ff" },
+    ];
+    let i = 0;
+    const iv = setInterval(() => {
+      if (i >= msgs.length) return;
+      const msg = { ...msgs[i], id: Date.now() };
+      setChat(c => [...c.slice(-20), msg]);
+      i++;
+      // Auto scroll chat to bottom
+      if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
+    }, 2800);
+    return () => clearInterval(iv);
+  }, []);
+
+  const addReaction = (emoji) => {
+    const id = Date.now();
+    setReactions(r => [...r, { id, emoji, x: Math.random()*80+10, side: Math.random()>0.5?"left":"right" }]);
+    setTimeout(() => setReactions(r => r.filter(rx=>rx.id!==id)), 2500);
+    socket.emit("reaction", { emoji });
+  };
+
+  const danger = timer <= 5;
+
+  return (
+    <div style={{ minHeight:"100vh", background:BG, color:"#f0eeea", fontFamily:"'Syne',sans-serif", display:"flex", flexDirection:"column" }}>
+      <style>{CSS}</style>
+
+      {/* ── NAV — spectator style ── */}
+      <nav style={{ height:58, display:"flex", alignItems:"center", justifyContent:"space-between", padding:"0 16px", background:"rgba(14,14,15,0.95)", backdropFilter:"blur(24px)", borderBottom:"1px solid rgba(255,255,255,0.06)", flexShrink:0, zIndex:100 }}>
+        {/* Left: branding */}
+        <div style={{ display:"flex", alignItems:"center", gap:9 }}>
+          <div style={{ width:26, height:26, borderRadius:7, background:"linear-gradient(135deg,#00f5a0,#00d4ff)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, animation:"glowP 3s infinite" }}>▶</div>
+          <span style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:20, letterSpacing:3, background:"linear-gradient(90deg,#00f5a0,#00d4ff)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent" }}>StrangerPlay</span>
+          {/* LIVE badge */}
+          <div style={{ display:"flex", alignItems:"center", gap:5, background:"rgba(255,77,109,0.12)", border:"1px solid rgba(255,77,109,0.25)", borderRadius:20, padding:"3px 10px" }}>
+            <div style={{ width:6, height:6, borderRadius:"50%", background:"#ff4d6d", animation:"livePing 1s infinite" }} />
+            <span style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:"#ff4d6d", letterSpacing:1 }}>LIVE</span>
+          </div>
+        </div>
+
+        {/* Center: SPORTS SCOREBOARD — player1 vs player2 */}
+        <div style={{ display:"flex", alignItems:"center", gap:12, position:"absolute", left:"50%", transform:"translateX(-50%)" }}>
+          <div style={{ textAlign:"right" }}>
+            <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#00f5a0" }}>{player1?.username||"player 1"} {player1?.flag||"🌍"}</div>
+            <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:28, color:"#00f5a0", lineHeight:1, animation: score1>0?"scoreFlash 0.4s":"none" }}>{score1}</div>
+          </div>
+          <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:2 }}>
+            <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:9, color:"#333", letterSpacing:2 }}>VS</div>
+            {/* timer chip */}
+            <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:18, color:danger?"#ff4d6d":"#f0eeea", background:danger?"rgba(255,77,109,0.1)":"rgba(255,255,255,0.04)", border:`1px solid ${danger?"rgba(255,77,109,0.3)":"rgba(255,255,255,0.08)"}`, borderRadius:8, padding:"2px 10px", transition:"all 0.3s" }}>
+              {timer}s
+            </div>
+            <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:9, color:"#444" }}>R{round}/{TOTAL_ROUNDS}</div>
+          </div>
+          <div style={{ textAlign:"left" }}>
+            <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#ff4d6d" }}>{player2?.username||"player 2"} {player2?.flag||"🌍"}</div>
+            <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:28, color:"#ff4d6d", lineHeight:1 }}>{score2}</div>
+          </div>
+        </div>
+
+        {/* Right: mode + back */}
+        <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+          <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:mode.color, background:`${mode.color}10`, border:`1px solid ${mode.color}25`, borderRadius:20, padding:"3px 10px" }}>
+            {mode.emoji} {mode.label}
+          </div>
+          {onBack && <button onClick={onBack} style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:8, padding:"6px 14px", color:"#555", fontSize:12, cursor:"pointer" }}>← leave</button>}
+        </div>
+      </nav>
+
+      {/* ── BODY ── */}
+      <div className="spectator-grid" style={{ flex:1, position:"relative" }}>
+
+        {/* ── PLAYER 1 CAM (left) ── */}
+        <div style={{ position:"relative", background:"#050506", borderRight:"1px solid rgba(255,255,255,0.04)", overflow:"hidden" }}>
+          {/* Placeholder — in prod this is the WebRTC stream of player 1 */}
+          <div style={{ position:"absolute", inset:0, display:"flex", alignItems:"center", justifyContent:"center", flexDirection:"column", gap:10 }}>
+            <div style={{ width:72, height:72, borderRadius:"50%", background:"rgba(0,245,160,0.06)", border:"2px solid rgba(0,245,160,0.2)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:32 }}>🧑</div>
+            <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:12, color:"#00f5a0" }}>{player1?.username||"player 1"}</div>
+          </div>
+
+          {/* Name tag — bottom left overlay */}
+          <div style={{ position:"absolute", bottom:12, left:12, display:"flex", alignItems:"center", gap:7, background:"rgba(0,0,0,0.72)", backdropFilter:"blur(12px)", borderRadius:10, padding:"6px 12px", border:"1px solid rgba(0,245,160,0.2)" }}>
+            <span style={{ fontSize:14 }}>{player1?.flag||"🌍"}</span>
+            <div>
+              <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#00f5a0", fontWeight:600 }}>{player1?.username||"player 1"}</div>
+              <div style={{ fontSize:10, color:rankColor(player1?.points||0) }}>{getRank(player1?.points||0)} · {(player1?.points||0).toLocaleString()} pts</div>
+            </div>
+          </div>
+
+          {/* Score badge — top left */}
+          <div style={{ position:"absolute", top:12, left:12, fontFamily:"'Bebas Neue',sans-serif", fontSize:40, color:"#00f5a0", textShadow:"0 0 20px rgba(0,245,160,0.5)", lineHeight:1 }}>{score1}</div>
+
+          {/* Floating reactions on this player's side */}
+          {reactions.filter(r=>r.side==="left").map(r=>(
+            <div key={r.id} style={{ position:"absolute", bottom:"25%", left:`${r.x*0.4}%`, fontSize:32, animation:"floatUp 2.5s forwards", pointerEvents:"none", zIndex:10 }}>{r.emoji}</div>
+          ))}
+        </div>
+
+        {/* ── PLAYER 2 CAM (right) ── */}
+        <div style={{ position:"relative", background:"#060507", overflow:"hidden" }}>
+          <div style={{ position:"absolute", inset:0, display:"flex", alignItems:"center", justifyContent:"center", flexDirection:"column", gap:10 }}>
+            <div style={{ width:72, height:72, borderRadius:"50%", background:"rgba(255,77,109,0.06)", border:"2px solid rgba(255,77,109,0.2)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:32 }}>🧑</div>
+            <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:12, color:"#ff4d6d" }}>{player2?.username||"player 2"}</div>
+          </div>
+
+          {/* Name tag — bottom right overlay */}
+          <div style={{ position:"absolute", bottom:12, right:12, display:"flex", alignItems:"center", gap:7, background:"rgba(0,0,0,0.72)", backdropFilter:"blur(12px)", borderRadius:10, padding:"6px 12px", border:"1px solid rgba(255,77,109,0.2)", flexDirection:"row-reverse" }}>
+            <span style={{ fontSize:14 }}>{player2?.flag||"🌍"}</span>
+            <div style={{ textAlign:"right" }}>
+              <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#ff4d6d", fontWeight:600 }}>{player2?.username||"player 2"}</div>
+              <div style={{ fontSize:10, color:rankColor(player2?.points||0) }}>{getRank(player2?.points||0)} · {(player2?.points||0).toLocaleString()} pts</div>
+            </div>
+          </div>
+
+          {/* Score badge — top right */}
+          <div style={{ position:"absolute", top:12, right:12, fontFamily:"'Bebas Neue',sans-serif", fontSize:40, color:"#ff4d6d", textShadow:"0 0 20px rgba(255,77,109,0.5)", lineHeight:1 }}>{score2}</div>
+
+          {/* Floating reactions */}
+          {reactions.filter(r=>r.side==="right").map(r=>(
+            <div key={r.id} style={{ position:"absolute", bottom:"25%", left:`${r.x*0.4+20}%`, fontSize:32, animation:"floatUp 2.5s forwards", pointerEvents:"none", zIndex:10 }}>{r.emoji}</div>
+          ))}
+        </div>
+
+        {/* ── RIGHT REACTION STRIP — vertical emoji buttons ── */}
+        <div className="spec-right" style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:8, padding:"8px 4px", background:"rgba(14,14,15,0.9)", borderLeft:"1px solid rgba(255,255,255,0.05)" }}>
+          {["😂","🔥","💀","🤣","👏","😮","🎭","⚡"].map(e=>(
+            <button key={e} onClick={()=>addReaction(e)} style={{ width:40, height:40, borderRadius:10, background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.07)", fontSize:18, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", transition:"transform 0.15s, background 0.15s" }}
+              onMouseEnter={ev=>{ev.currentTarget.style.transform="scale(1.2)"; ev.currentTarget.style.background="rgba(255,255,255,0.1)";}}
+              onMouseLeave={ev=>{ev.currentTarget.style.transform="scale(1)"; ev.currentTarget.style.background="rgba(255,255,255,0.04)";}}
+            >{e}</button>
+          ))}
+        </div>
+
+        {/* ── LIVE CHAT — slides up from bottom over both cams ── */}
+        <div style={{ position:"absolute", bottom:0, left:0, width:"40%", maxWidth:280, padding:"8px 12px 16px", pointerEvents:"none", zIndex:20 }}>
+          <div ref={chatRef} style={{ display:"flex", flexDirection:"column", gap:5, maxHeight:220, overflow:"hidden" }}>
+            {chat.slice(-8).map((m,i)=>(
+              <div key={m.id} style={{ display:"flex", alignItems:"flex-start", gap:6, animation:"chatSlide 0.3s both", animationDelay:`${i*0.04}s` }}>
+                <span style={{ fontSize:12, flexShrink:0 }}>{m.flag}</span>
+                <div style={{ background:"rgba(8,8,9,0.7)", backdropFilter:"blur(8px)", borderRadius:8, padding:"4px 9px", maxWidth:"100%" }}>
+                  <span style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:m.color, fontWeight:600 }}>{m.user} </span>
+                  <span style={{ fontSize:12, color:"#ccc" }}>{m.msg}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* ── GAME PROMPT TICKER — center bottom ── */}
+        <div style={{ position:"absolute", bottom:16, left:"50%", transform:"translateX(-50%)", whiteSpace:"nowrap", background:"rgba(0,0,0,0.82)", backdropFilter:"blur(16px)", border:`1px solid ${mode.color}33`, borderRadius:12, padding:"8px 18px", zIndex:25 }}>
+          <span style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:mode.color, letterSpacing:2, marginRight:8 }}>{mode.emoji}</span>
+          <span style={{ fontSize:12, color:"#aaa" }}>{mode.desc}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────
+   PLAYER VIEW — main game component
+   This is for the two people PLAYING
 ───────────────────────────────────────────── */
 export default function GameScreen({
-  gameMode  = "dontlaugh",
-  opponent  = { name: "stranger_7829", flag: "🇧🇷", avatar: "🧑", pts: 3200 },
-  entryFee  = 10,
-  myPoints  = 74,
+  gameMode    = "dontlaugh",
+  roomId,
+  role,
+  opponent    = { username:"stranger", flag:"🌍", points:0 },
+  entryFee    = 3,
+  myPoints    = 0,
+  myUsername  = "you",
+  myFlag      = "🌍",
   onBack,
+  onMatchEnd,
+  // Set isPlayer=false to render SpectatorView instead
+  isPlayer    = true,
+  // Spectator-only props
+  player1,
+  player2,
 }) {
+  // Route to spectator layout immediately — no camera, no game logic
+  if (!isPlayer) {
+    return <SpectatorView gameMode={gameMode} player1={player1||opponent} player2={player2} onBack={onBack} />;
+  }
+
   const mode = MODES[gameMode] || MODES.dontlaugh;
 
   /* ── STATE ── */
-  const [phase,          setPhase]         = useState("loading");
-  const [loadStatus,     setLoadStatus]    = useState("Starting camera...");
-  const [timer,          setTimer]         = useState(mode.duration);
-  const [round,          setRound]         = useState(1);
-  const [myRoundScores,  setMyRoundScores] = useState([]);
-  const [roundResult,    setRoundResult]   = useState(null);
-  const [matchWon,       setMatchWon]      = useState(null);
-  const [promptIdx,      setPromptIdx]     = useState(0);
-  const [smileDetected,  setSmileDetected] = useState(false);
-  const [myVotePct,      setMyVotePct]     = useState(0);
-  const [oppVotePct,     setOppVotePct]    = useState(0);
-  const [voting,         setVoting]        = useState(false);
-  const [mirrorPhase,    setMirrorPhase]   = useState("pose");
-  const [myMirrorScore,  setMyMirrorScore] = useState(null);
-  const [reactions,      setReactions]     = useState([]);
-  const [myScore,        setMyScore]       = useState(0);
-  const [oppScore,       setOppScore]      = useState(0);
+  const [phase,         setPhase]        = useState("loading");
+  const [loadStatus,    setLoadStatus]   = useState("Asking for camera...");
+  const [timer,         setTimer]        = useState(mode.duration);
+  const [round,         setRound]        = useState(1);
+  const [myRoundScores, setMyRoundScores]= useState([]);
+  const [roundResult,   setRoundResult]  = useState(null);
+  const [matchWon,      setMatchWon]     = useState(null);
+  const [promptIdx,     setPromptIdx]    = useState(0);
+  const [smileDetected, setSmileDetected]= useState(false);
+  const [myVotePct,     setMyVotePct]    = useState(0);
+  const [oppVotePct,    setOppVotePct]   = useState(0);
+  const [voting,        setVoting]       = useState(false);
+  const [mirrorPhase,   setMirrorPhase]  = useState("pose");
+  const [myMirrorScore, setMyMirrorScore]= useState(null);
+  const [reactions,     setReactions]    = useState([]);
+  const [myScore,       setMyScore]      = useState(0);
+  const [oppScore,      setOppScore]     = useState(0);
+  const [oppLeft,       setOppLeft]      = useState(false);
+  const [muted,         setMuted]        = useState(false);
+  const [camOff,        setCamOff]       = useState(false);
 
   /* ── REFS ── */
-  const videoRef      = useRef(null);
-  const videoShowRef  = useRef(null); // second video element shown to user
-  const overlayRef    = useRef(null);
+  const myVideoRef    = useRef(null);   // your camera — shown BIG
+  const oppVideoRef   = useRef(null);   // opponent camera — shown BIG
+  const hiddenRef     = useRef(null);   // hidden video BlazeFace reads
+  const overlayRef    = useRef(null);   // face landmark canvas
   const animRef       = useRef(null);
   const faceIvRef     = useRef(null);
   const timerIvRef    = useRef(null);
   const modelRef      = useRef(null);
   const streamRef     = useRef(null);
+  const pcRef         = useRef(null);
   const phaseRef      = useRef("loading");
   const roundRef      = useRef(1);
   const poseLMRef     = useRef(null);
 
-  // faceTrack: async face interval writes here, rAF reads here
+  // faceTrack: async interval writes → rAF reads (never mix)
   const faceTrack = useRef({ cx:0, cy:0, faceW:80, faceH:80, landmarks:null, mouthOpen:0, found:false });
 
   useEffect(() => { phaseRef.current = phase; }, [phase]);
   useEffect(() => { roundRef.current = round; }, [round]);
 
   /* ─────────────────────────────────────────────
-     SETUP
+     WEBRTC PEER CONNECTION
+     STUN = free Google servers that tell each browser its public IP
+     Without STUN two browsers behind routers can't find each other
+  ───────────────────────────────────────────── */
+  useEffect(() => {
+    if (!roomId) return;
+
+    const pc = new RTCPeerConnection({
+      iceServers: [
+        { urls:"stun:stun.l.google.com:19302" },
+        { urls:"stun:stun1.l.google.com:19302" },
+      ],
+    });
+    pcRef.current = pc;
+
+    // Remote stream arrived — opponent's camera
+    pc.ontrack = (event) => {
+      if (oppVideoRef.current && event.streams[0]) {
+        oppVideoRef.current.srcObject = event.streams[0];
+      }
+    };
+
+    // ICE candidate discovered — relay to opponent via server
+    pc.onicecandidate = (event) => {
+      if (event.candidate) socket.emit("webrtc:ice", { roomId, candidate:event.candidate });
+    };
+
+    // Receive offer (we are answerer)
+    socket.on("webrtc:offer", async ({ sdp }) => {
+      await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      socket.emit("webrtc:answer", { roomId, sdp: pc.localDescription });
+    });
+
+    // Receive answer (we are offerer)
+    socket.on("webrtc:answer", async ({ sdp }) => {
+      await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+    });
+
+    // ICE from opponent
+    socket.on("webrtc:ice", async ({ candidate }) => {
+      try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch {}
+    });
+
+    // Opponent quit mid-match
+    socket.on("opponent:left", () => {
+      setOppLeft(true);
+      endMatch(true);
+    });
+
+    return () => {
+      socket.off("webrtc:offer");
+      socket.off("webrtc:answer");
+      socket.off("webrtc:ice");
+      socket.off("opponent:left");
+      pc.close();
+    };
+  }, [roomId]); // eslint-disable-line
+
+  /* ─────────────────────────────────────────────
+     CAMERA + FACE MODEL SETUP
   ───────────────────────────────────────────── */
   useEffect(() => {
     let mounted = true;
     (async () => {
       try {
-        const s = await navigator.mediaDevices.getUserMedia({ video:{ width:640, height:480, facingMode:"user" }, audio:false });
+        // Request both video AND audio — opponent needs to hear you
+        const s = await navigator.mediaDevices.getUserMedia({
+          video:{ width:640, height:480, facingMode:"user" },
+          audio:true,
+        });
         if (!mounted) return;
         streamRef.current = s;
-        // hidden processing video
-        videoRef.current.srcObject = s;
-        await videoRef.current.play();
-        // visible display video
-        if (videoShowRef.current) {
-          videoShowRef.current.srcObject = s;
-          await videoShowRef.current.play();
+
+        // Hidden video — BlazeFace reads this for face detection
+        if (hiddenRef.current) {
+          hiddenRef.current.srcObject = s;
+          await hiddenRef.current.play();
+        }
+
+        // Visible self-cam — this is YOUR camera shown big on screen
+        if (myVideoRef.current) {
+          myVideoRef.current.srcObject = s;
+          await myVideoRef.current.play();
+        }
+
+        // Add tracks to WebRTC — this is what the opponent sees/hears
+        if (pcRef.current) {
+          s.getTracks().forEach(track => pcRef.current.addTrack(track, s));
+
+          // Offerer goes first — creates the SDP offer
+          if (role === "offer") {
+            const offer = await pcRef.current.createOffer();
+            await pcRef.current.setLocalDescription(offer);
+            socket.emit("webrtc:offer", { roomId, sdp: pcRef.current.localDescription });
+          }
         }
       } catch {
-        setLoadStatus("Camera permission denied. Allow access and refresh.");
+        setLoadStatus("Camera blocked. Allow access and refresh.");
         return;
       }
 
@@ -323,26 +646,22 @@ export default function GameScreen({
   }
 
   /* ─────────────────────────────────────────────
-     FACE DETECTION INTERVAL
-     async setInterval — never inside rAF
+     FACE DETECTION — async setInterval, writes to ref
+     NEVER inside rAF — this lesson was hard learned
   ───────────────────────────────────────────── */
   function startFaceInterval() {
     clearInterval(faceIvRef.current);
     faceIvRef.current = setInterval(async () => {
-      if (!modelRef.current || !videoRef.current || videoRef.current.readyState < 2) return;
+      if (!modelRef.current || !hiddenRef.current || hiddenRef.current.readyState < 2) return;
       try {
-        const preds = await modelRef.current.estimateFaces(videoRef.current, false);
+        const preds = await modelRef.current.estimateFaces(hiddenRef.current, false);
         if (preds.length > 0) {
           const f = preds[0];
-          const [x1, y1] = f.topLeft;
-          const [x2, y2] = f.bottomRight;
+          const [x1,y1] = f.topLeft, [x2,y2] = f.bottomRight;
           const lm = f.landmarks || [];
           faceTrack.current = {
-            cx: (x1+x2)/2, cy: (y1+y2)/2,
-            faceW: x2-x1, faceH: y2-y1,
-            landmarks: lm,
-            mouthOpen: getMouthOpenness(lm),
-            found: true,
+            cx:(x1+x2)/2, cy:(y1+y2)/2, faceW:x2-x1, faceH:y2-y1,
+            landmarks:lm, mouthOpen:getMouthOpenness(lm), found:true,
           };
         } else {
           faceTrack.current.found = false;
@@ -352,7 +671,8 @@ export default function GameScreen({
   }
 
   /* ─────────────────────────────────────────────
-     OVERLAY rAF — sync, reads faceTrack
+     OVERLAY rAF — sync, reads faceTrack ref
+     This draws the glowing face ring on YOUR camera
   ───────────────────────────────────────────── */
   function startRenderLoop() {
     cancelAnimationFrame(animRef.current);
@@ -364,26 +684,22 @@ export default function GameScreen({
       ctx.clearRect(0, 0, W, H);
 
       const ft = faceTrack.current;
-      const vw = videoRef.current?.videoWidth  || 640;
-      const vh = videoRef.current?.videoHeight || 480;
+      const vw = hiddenRef.current?.videoWidth  || 640;
+      const vh = hiddenRef.current?.videoHeight || 480;
 
       if (ft.found && ft.faceW > 0) {
-        // mirror X (video is CSS mirrored)
-        const mx = W - ft.cx * (W / vw);
-        const my = ft.cy * (H / vh);
-        const fw = ft.faceW * (W / vw);
-
+        const mx = W - ft.cx*(W/vw);
+        const my = ft.cy*(H/vh);
+        const fw = ft.faceW*(W/vw);
         const smiling = ft.mouthOpen > SMILE_THRESHOLD;
         const col = smiling ? "#ff4d6d" : "#00f5a0";
 
-        // glow ring around face
         ctx.beginPath();
-        ctx.arc(mx, my, fw/2 + 10, 0, Math.PI*2);
+        ctx.arc(mx, my, fw/2+10, 0, Math.PI*2);
         ctx.strokeStyle = col; ctx.lineWidth = 2.5;
         ctx.shadowColor = col; ctx.shadowBlur = 18;
         ctx.stroke(); ctx.shadowBlur = 0;
 
-        // landmark dots
         ctx.fillStyle = "#00d4ff";
         (ft.landmarks||[]).forEach(([lx,ly]) => {
           ctx.beginPath();
@@ -391,12 +707,10 @@ export default function GameScreen({
           ctx.fill();
         });
 
-        // update smile state (sync, no setState in rAF — use ref check)
         if (phaseRef.current === "playing" && gameMode === "dontlaugh") {
           setSmileDetected(smiling);
         }
       }
-
       animRef.current = requestAnimationFrame(render);
     };
     animRef.current = requestAnimationFrame(render);
@@ -418,7 +732,7 @@ export default function GameScreen({
     poseLMRef.current = null;
     setPhase("playing");
 
-    socketEmit("round:start", { round: n, mode: gameMode });
+    socket.emit("round:start", { roomId, round:n, mode:gameMode });
     startFaceInterval();
     startRenderLoop();
 
@@ -430,43 +744,38 @@ export default function GameScreen({
     }, 1000);
   }
 
-  function handleRoundEnd(reason, winner = null) {
+  function handleRoundEnd(reason, winner=null) {
     clearInterval(timerIvRef.current);
     clearInterval(faceIvRef.current);
     cancelAnimationFrame(animRef.current);
     setSmileDetected(false);
 
     let iWon;
-    if      (reason === "smiled")                            iWon = false;
-    else if (reason === "timeout" && gameMode==="dontlaugh") iWon = true;
-    else iWon = winner !== null ? winner : Math.random() > 0.5;
+    if      (reason==="smiled")                             iWon = false;
+    else if (reason==="timeout" && gameMode==="dontlaugh")  iWon = true;
+    else iWon = winner!==null ? winner : Math.random()>0.5;
 
     const result = iWon ? "win" : "loss";
     setRoundResult(result);
-    if (iWon) setMyScore(s => s+1);
-    else       setOppScore(s => s+1);
+    if (iWon) setMyScore(s=>s+1); else setOppScore(s=>s+1);
     setPhase("roundResult");
 
     setMyRoundScores(prev => {
       const next = [...prev, result];
-      socketEmit("round:end", { round: roundRef.current, result });
-
-      const wins   = next.filter(r=>r==="win").length;
+      socket.emit("round:end", { roomId, round:roundRef.current, result });
+      const wins = next.filter(r=>r==="win").length;
       const losses = next.filter(r=>r==="loss").length;
-      const done   = wins >= 2 || losses >= 2 || next.length >= TOTAL_ROUNDS;
-
+      const done = wins>=2 || losses>=2 || next.length>=TOTAL_ROUNDS;
       setTimeout(() => {
-        if (done) endMatch(wins >= losses);
-        else startRound(roundRef.current + 1);
+        if (done) endMatch(wins>=losses);
+        else startRound(roundRef.current+1);
       }, RESULT_DURATION);
-
       return next;
     });
   }
 
-  // smile triggers round end
   useEffect(() => {
-    if (smileDetected && phaseRef.current === "playing" && gameMode === "dontlaugh") {
+    if (smileDetected && phaseRef.current==="playing" && gameMode==="dontlaugh") {
       handleRoundEnd("smiled");
     }
   }, [smileDetected]); // eslint-disable-line
@@ -474,298 +783,307 @@ export default function GameScreen({
   function endMatch(won) {
     setMatchWon(won);
     setPhase("matchResult");
-    socketEmit("match:end", { won, entryFee, mode: gameMode });
+    socket.emit("match:end", { roomId, won, entryFee, gameMode });
+    if (onMatchEnd) onMatchEnd(won, entryFee);
   }
 
-  /* ── Vibe Check / Hot Take — crowd vote ── */
   function triggerVote() {
     clearInterval(timerIvRef.current);
     setVoting(true);
     let elapsed = 0;
     const iv = setInterval(() => {
       elapsed++;
-      const me = 35 + Math.random() * 30;
+      const me = 35+Math.random()*30;
       setMyVotePct(me); setOppVotePct(100-me);
-      if (elapsed >= VOTE_DURATION) {
+      if (elapsed>=VOTE_DURATION) {
         clearInterval(iv);
-        const final = 35 + Math.random() * 35;
+        const final = 35+Math.random()*35;
         setMyVotePct(final); setOppVotePct(100-final);
-        handleRoundEnd("vote", final >= 50);
+        handleRoundEnd("vote", final>=50);
       }
     }, 1000);
   }
 
-  /* ── Mirror Me ── */
   function captureMyPose() {
     poseLMRef.current = faceTrack.current.landmarks;
     setMirrorPhase("copy");
     let t = 5; setTimer(5);
     const iv = setInterval(() => {
       t--; setTimer(t);
-      if (t <= 0) {
+      if (t<=0) {
         clearInterval(iv);
         const sc = mirrorScore(poseLMRef.current, faceTrack.current.landmarks);
         setMyMirrorScore(sc);
-        handleRoundEnd("mirror", sc >= 50);
+        handleRoundEnd("mirror", sc>=50);
       }
     }, 1000);
   }
 
-  /* ── Reactions ── */
   function addReaction(emoji) {
     const id = Date.now();
-    setReactions(r => [...r, { id, emoji, x: Math.random()*65+10 }]);
-    setTimeout(() => setReactions(r => r.filter(rx=>rx.id!==id)), 2200);
-    socketEmit("reaction", { emoji });
+    setReactions(r=>[...r,{id,emoji,x:Math.random()*70+10}]);
+    setTimeout(()=>setReactions(r=>r.filter(rx=>rx.id!==id)),2500);
+    socket.emit("reaction", { roomId, emoji });
   }
 
-  /* ── Play again ── */
+  function toggleMute() {
+    if (!streamRef.current) return;
+    streamRef.current.getAudioTracks().forEach(t => t.enabled = muted);
+    setMuted(m=>!m);
+  }
+
+  function toggleCam() {
+    if (!streamRef.current) return;
+    streamRef.current.getVideoTracks().forEach(t => t.enabled = camOff);
+    setCamOff(c=>!c);
+  }
+
   function playAgain() {
     setMyRoundScores([]); setMyScore(0); setOppScore(0);
     setMatchWon(null); setRoundResult(null);
     setPhase("intro");
-    setTimeout(() => startRound(1), INTRO_DURATION);
+    setTimeout(()=>startRound(1), INTRO_DURATION);
   }
 
   const prompts = mode.prompts || mode.poses || [];
   const currentPrompt = prompts[promptIdx] || prompts[0] || "";
+  const danger = timer <= 5;
 
   /* ─────────────────────────────────────────────
-     RENDER
+     PLAYER RENDER
+     Layout: two big cams side by side (desktop) or stacked (mobile)
+     No tiny pip — both cams are full and equal
   ───────────────────────────────────────────── */
   return (
-    <div style={{ minHeight:"100vh", background:BG, backgroundAttachment:"fixed", color:"#f0eeea", fontFamily:"'Syne',sans-serif", display:"flex", flexDirection:"column" }}>
+    <div style={{ height:"100vh", background:BG, color:"#f0eeea", fontFamily:"'Syne',sans-serif", display:"flex", flexDirection:"column", overflow:"hidden" }}>
       <style>{CSS}</style>
 
-      {/* hidden video for face detection processing */}
-      <video ref={videoRef} style={{ position:"fixed", opacity:0, pointerEvents:"none", width:1, height:1 }} muted playsInline />
+      {/* Hidden video — face detection only */}
+      <video ref={hiddenRef} style={{ position:"fixed", opacity:0, pointerEvents:"none", width:1, height:1 }} muted playsInline />
 
       {/* ══════ NAV ══════ */}
-      <nav style={{ flexShrink:0, display:"flex", alignItems:"center", justifyContent:"space-between", height:58, padding:"0 clamp(12px,4vw,36px)", background:"rgba(14,14,15,0.92)", backdropFilter:"blur(24px)", borderBottom:"1px solid rgba(255,255,255,0.06)", zIndex:100 }}>
+      <nav style={{ flexShrink:0, height:58, display:"flex", alignItems:"center", justifyContent:"space-between", padding:"0 clamp(10px,3vw,24px)", background:"rgba(14,14,15,0.95)", backdropFilter:"blur(24px)", borderBottom:"1px solid rgba(255,255,255,0.06)", zIndex:100 }}>
+        {/* Left: logo + game label */}
         <div style={{ display:"flex", alignItems:"center", gap:9 }}>
           <div style={{ width:26, height:26, borderRadius:7, background:"linear-gradient(135deg,#00f5a0,#00d4ff)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, animation:"glowP 3s infinite" }}>▶</div>
           <span style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:20, letterSpacing:3, background:"linear-gradient(90deg,#00f5a0,#00d4ff)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent" }}>StrangerPlay</span>
-          <span style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:"#333", marginLeft:6 }}>// {mode.label}</span>
+          <span style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:"#333", marginLeft:4 }}>// {mode.label}</span>
         </div>
+
+        {/* Center: score + timer — the sports scoreboard */}
+        <div style={{ display:"flex", alignItems:"center", gap:14, position:"absolute", left:"50%", transform:"translateX(-50%)" }}>
+          <div style={{ textAlign:"right" }}>
+            <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:"#00f5a0" }}>{myUsername}</div>
+            <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:26, color:"#00f5a0", lineHeight:1 }}>{myScore}</div>
+          </div>
+          <TimerRing seconds={timer} total={mode.duration} color={mode.color} />
+          <div style={{ textAlign:"left" }}>
+            <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:"#ff4d6d" }}>{opponent.username}</div>
+            <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:26, color:"#ff4d6d", lineHeight:1 }}>{oppScore}</div>
+          </div>
+        </div>
+
+        {/* Right: round dots + pts + back */}
         <div style={{ display:"flex", alignItems:"center", gap:10 }}>
           <RoundDots total={TOTAL_ROUNDS} scores={myRoundScores} />
-          <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#ffd60a", background:"rgba(255,214,10,0.07)", border:"1px solid rgba(255,214,10,0.14)", borderRadius:20, padding:"3px 12px" }}>{myPoints} pts</div>
-          {onBack && <button onClick={()=>{ cleanup(); onBack(); }} style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:8, padding:"6px 16px", color:"#555", fontSize:13, cursor:"pointer" }}>← back</button>}
+          <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#ffd60a", background:"rgba(255,214,10,0.07)", border:"1px solid rgba(255,214,10,0.14)", borderRadius:20, padding:"3px 10px" }}>{myPoints}pts</div>
+          {onBack && <button onClick={()=>{cleanup();onBack();}} style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:8, padding:"6px 14px", color:"#555", fontSize:12, cursor:"pointer" }}>← exit</button>}
         </div>
       </nav>
 
-      {/* ══════ BODY ══════ */}
-      <div style={{ flex:1, display:"grid", gridTemplateColumns:"1fr clamp(170px,22%,230px)", gap:12, padding:"clamp(8px,2vw,16px)", minHeight:0 }}>
+      {/* ══════ DUAL CAM GRID ══════
+          Both cameras are equal size — no tiny PIP
+          Desktop: side by side
+          Mobile:  stacked vertically (opponent top, you bottom)
+      */}
+      <div className="player-grid" style={{ flex:1, position:"relative" }}>
 
-        {/* ── LEFT ── */}
-        <div style={{ display:"flex", flexDirection:"column", gap:10, minHeight:0 }}>
+        {/* ── OPPONENT CAM (left on desktop, top on mobile) ── */}
+        <div style={{ position:"relative", background:"#050506", overflow:"hidden", borderRight:"1px solid rgba(255,255,255,0.04)" }}>
+          {/* Opponent video stream — fills entire half */}
+          <video ref={oppVideoRef} autoPlay playsInline
+            style={{ position:"absolute", inset:0, width:"100%", height:"100%", objectFit:"cover" }}
+          />
 
-          {/* score header */}
-          {phase !== "loading" && (
-            <div style={{ display:"grid", gridTemplateColumns:"1fr auto 1fr", alignItems:"center", gap:8, animation:"fadeUp 0.4s both" }}>
-              <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                <div style={{ width:32, height:32, borderRadius:"50%", background:"rgba(0,245,160,0.1)", border:"2px solid rgba(0,245,160,0.25)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:16 }}>⭐</div>
-                <div>
-                  <div style={{ fontSize:12, fontWeight:600, color:"#00f5a0" }}>raj_np 🇳🇵</div>
-                  <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:22, lineHeight:1, color:"#00f5a0" }}>{myScore}</div>
-                </div>
+          {/* Connecting placeholder — hidden once stream arrives */}
+          <div style={{ position:"absolute", inset:0, display:"flex", alignItems:"center", justifyContent:"center", flexDirection:"column", gap:12, pointerEvents:"none", zIndex:2 }}>
+            {oppLeft ? (
+              <>
+                <div style={{ fontSize:44 }}>👋</div>
+                <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:13, color:"#ff4d6d" }}>{opponent.username} left</div>
+                <div style={{ fontSize:11, color:"#444" }}>you win by default</div>
+              </>
+            ) : (
+              <>
+                <div style={{ width:60, height:60, borderRadius:"50%", background:"rgba(255,77,109,0.06)", border:"2px solid rgba(255,77,109,0.18)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:28 }}>🧑</div>
+                <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:12, color:"#ff4d6d" }}>{opponent.username} {opponent.flag}</div>
+                <div style={{ fontSize:10, color:"#333" }}>connecting...</div>
+              </>
+            )}
+          </div>
+
+          {/* Opponent name tag — bottom left */}
+          <div style={{ position:"absolute", bottom:80, left:12, display:"flex", alignItems:"center", gap:8, background:"rgba(0,0,0,0.72)", backdropFilter:"blur(12px)", borderRadius:10, padding:"7px 12px", border:"1px solid rgba(255,77,109,0.2)", zIndex:5 }}>
+            <span style={{ fontSize:16 }}>{opponent.flag}</span>
+            <div>
+              <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:12, color:"#ff4d6d", fontWeight:600 }}>{opponent.username}</div>
+              <div style={{ fontSize:10, color:rankColor(opponent.points) }}>{getRank(opponent.points)} · {(opponent.points||0).toLocaleString()} pts</div>
+            </div>
+          </div>
+
+          {/* Reactions floating on opponent's side */}
+          {reactions.map(r=>(
+            <div key={r.id} style={{ position:"absolute", bottom:"30%", left:`${r.x}%`, fontSize:30, animation:"floatUp 2.5s forwards", pointerEvents:"none", zIndex:10 }}>{r.emoji}</div>
+          ))}
+
+          {/* Round result overlay — only on opponent side */}
+          {phase==="roundResult" && (
+            <div style={{ position:"absolute", inset:0, display:"flex", alignItems:"center", justifyContent:"center", background:"rgba(8,8,9,0.82)", zIndex:15, animation:"fadeIn 0.3s both" }}>
+              <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"clamp(44px,10vw,72px)", letterSpacing:3, color:roundResult==="win"?"#00f5a0":"#ff4d6d", textShadow:`0 0 40px ${roundResult==="win"?"rgba(0,245,160,0.7)":"rgba(255,77,109,0.7)"}`, animation:"winPop 0.5s both" }}>
+                {roundResult==="win"?"WIN 🎉":"LOSS 💀"}
               </div>
-              <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:4 }}>
-                {phase==="playing" && !voting
-                  ? <TimerRing seconds={timer} total={mode.duration} color={mode.color} />
-                  : <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color: voting?mode.color:"#444", letterSpacing:2, animation: voting?"pulse 1s infinite":"none" }}>
-                      {voting ? "VOTING..." : `Round ${round}/${TOTAL_ROUNDS}`}
-                    </div>
-                }
-              </div>
-              <div style={{ display:"flex", alignItems:"center", gap:8, justifyContent:"flex-end" }}>
-                <div style={{ textAlign:"right" }}>
-                  <div style={{ fontSize:12, fontWeight:600, color:"#ff4d6d" }}>{opponent.name} {opponent.flag}</div>
-                  <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:22, lineHeight:1, color:"#ff4d6d" }}>{oppScore}</div>
-                </div>
-                <div style={{ width:32, height:32, borderRadius:"50%", background:"rgba(255,77,109,0.1)", border:"2px solid rgba(255,77,109,0.25)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:16 }}>{opponent.avatar}</div>
+            </div>
+          )}
+        </div>
+
+        {/* ── YOUR CAM (right on desktop, bottom on mobile) ── */}
+        <div style={{ position:"relative", background:"#060507", overflow:"hidden" }}>
+          {/* Your video — fills entire half, mirrored like a selfie cam */}
+          <video ref={myVideoRef} autoPlay muted playsInline
+            style={{ position:"absolute", inset:0, width:"100%", height:"100%", objectFit:"cover", transform:"scaleX(-1)", display:camOff?"none":"block" }}
+          />
+          {camOff && (
+            <div style={{ position:"absolute", inset:0, display:"flex", alignItems:"center", justifyContent:"center", background:"#080809" }}>
+              <div style={{ textAlign:"center" }}>
+                <div style={{ fontSize:44, marginBottom:10 }}>📷</div>
+                <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:12, color:"#333" }}>camera off</div>
               </div>
             </div>
           )}
 
-          {/* camera box */}
-          <div style={{ position:"relative", borderRadius:16, overflow:"hidden", border:`1px solid ${mode.color}33`, background:"#080809", flex:"1 1 auto", minHeight:280 }}>
+          {/* Face landmark overlay — drawn on your cam */}
+          <canvas ref={overlayRef} width={640} height={480}
+            style={{ position:"absolute", inset:0, width:"100%", height:"100%", pointerEvents:"none", zIndex:3, transform:"scaleX(-1)" }}
+          />
 
-            {/* visible camera feed */}
-            {phase !== "loading" && (
-              <video ref={videoShowRef} autoPlay muted playsInline
-                style={{ width:"100%", height:"100%", objectFit:"cover", transform:"scaleX(-1)", display:"block", position:"absolute", inset:0 }}
-              />
-            )}
+          {/* Smile detected flash border */}
+          {smileDetected && (
+            <div style={{ position:"absolute", inset:0, border:"4px solid #ff4d6d", boxShadow:"inset 0 0 50px rgba(255,77,109,0.4)", animation:"smileWarn 0.3s infinite", pointerEvents:"none", zIndex:6 }} />
+          )}
 
-            {/* face landmark overlay */}
-            <canvas ref={overlayRef} width={640} height={480}
-              style={{ position:"absolute", inset:0, width:"100%", height:"100%", pointerEvents:"none", zIndex:2 }}
-            />
+          {/* YOU smiled warning text */}
+          {gameMode==="dontlaugh" && smileDetected && (
+            <div style={{ position:"absolute", top:"38%", left:"50%", transform:"translate(-50%,-50%)", fontFamily:"'Bebas Neue',sans-serif", fontSize:"clamp(32px,8vw,56px)", color:"#ff4d6d", textShadow:"0 0 30px rgba(255,77,109,0.9)", animation:"smileWarn 0.3s infinite", whiteSpace:"nowrap", zIndex:8, pointerEvents:"none" }}>
+              YOU SMILED 😂
+            </div>
+          )}
 
-            {/* smile border flash */}
-            {smileDetected && (
-              <div style={{ position:"absolute", inset:0, borderRadius:16, border:"3px solid #ff4d6d", boxShadow:"inset 0 0 40px rgba(255,77,109,0.3)", animation:"smileWarn 0.3s infinite", pointerEvents:"none", zIndex:5 }} />
-            )}
-
-            {/* ── LOADING ── */}
-            {phase==="loading" && (
-              <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:16, background:"rgba(8,8,9,0.96)", zIndex:10 }}>
-                <div style={{ width:50, height:50, borderRadius:"50%", border:"2px solid transparent", borderTopColor:"#00f5a0", borderRightColor:"#00d4ff", animation:"spinRing 1s linear infinite" }} />
-                <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:20, letterSpacing:3, color:"#00f5a0" }}>SETTING UP</div>
-                <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#444", textAlign:"center", maxWidth:240 }}>{loadStatus}</div>
-              </div>
-            )}
-
-            {/* ── INTRO ── */}
-            {phase==="intro" && (
-              <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:14, background:"rgba(8,8,9,0.78)", zIndex:10, animation:"fadeIn 0.3s both" }}>
-                <div style={{ fontSize:52 }}>{mode.emoji}</div>
-                <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"clamp(28px,6vw,48px)", letterSpacing:3, color:mode.color, textShadow:`0 0 30px ${mode.color}` }}>{mode.label.toUpperCase()}</div>
-                <div style={{ fontSize:13, color:"#555", textAlign:"center", maxWidth:260, lineHeight:1.6 }}>{mode.desc}</div>
-                <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#333", letterSpacing:2, animation:"pulse 1.5s infinite" }}>starting round 1...</div>
-              </div>
-            )}
-
-            {/* ── PLAYING overlay ── */}
-            {phase==="playing" && (
-              <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column", justifyContent:"flex-end", padding:14, gap:10, zIndex:4 }}>
-
-                {/* You smiled warning */}
-                {gameMode==="dontlaugh" && smileDetected && (
-                  <div style={{ position:"absolute", top:"42%", left:"50%", transform:"translate(-50%,-50%)", fontFamily:"'Bebas Neue',sans-serif", fontSize:"clamp(36px,8vw,56px)", color:"#ff4d6d", textShadow:"0 0 30px rgba(255,77,109,0.9)", animation:"smileWarn 0.3s infinite", whiteSpace:"nowrap", zIndex:8 }}>
-                    YOU SMILED! 😂
-                  </div>
-                )}
-
-                {/* prompt bar at bottom */}
-                {(gameMode==="dontlaugh"||gameMode==="vibecheck"||gameMode==="hottake") && (
-                  <div style={{ background:"rgba(0,0,0,0.75)", backdropFilter:"blur(14px)", borderRadius:12, padding:"12px 16px", border:`1px solid ${mode.color}33` }}>
-                    <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:mode.color, letterSpacing:2, marginBottom:5 }}>
-                      {gameMode==="dontlaugh"?"IMAGINE THIS:":gameMode==="hottake"?"HOT TAKE:":"YOUR VIBE:"}
-                    </div>
-                    <div style={{ fontSize:"clamp(13px,2vw,16px)", fontWeight:600, color:"#f0eeea", lineHeight:1.4 }}>{currentPrompt}</div>
-                  </div>
-                )}
-
-                {/* Mirror Me controls */}
-                {gameMode==="mirrorme" && (
-                  <div style={{ background:"rgba(0,0,0,0.75)", backdropFilter:"blur(14px)", borderRadius:12, padding:"12px 16px", border:`1px solid ${mode.color}33` }}>
-                    <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:mode.color, letterSpacing:2, marginBottom:5 }}>
-                      {mirrorPhase==="pose"?"MAKE THIS FACE:":"NOW COPY IT EXACTLY:"}
-                    </div>
-                    <div style={{ fontSize:14, fontWeight:600, color:"#f0eeea", lineHeight:1.4, marginBottom:mirrorPhase==="pose"?10:0 }}>{currentPrompt}</div>
-                    {mirrorPhase==="pose" && (
-                      <button onClick={captureMyPose} style={{ background:`linear-gradient(135deg,${mode.color},#00d4ff)`, color:"#0a0a0a", border:"none", borderRadius:8, padding:"8px 20px", fontFamily:"'Bebas Neue',sans-serif", fontSize:16, letterSpacing:2, cursor:"pointer" }}>
-                        CAPTURE POSE
-                      </button>
-                    )}
-                    {myMirrorScore!==null && (
-                      <div style={{ marginTop:6, fontFamily:"'Bebas Neue',sans-serif", fontSize:22, color:mode.color }}>Accuracy: {myMirrorScore}/100</div>
-                    )}
-                  </div>
-                )}
-
-                {/* vote trigger */}
-                {(gameMode==="vibecheck"||gameMode==="hottake") && !voting && timer<=mode.duration-5 && (
-                  <button onClick={triggerVote} style={{ background:`linear-gradient(135deg,${mode.color},#a064ff)`, color:"#0a0a0a", border:"none", borderRadius:10, padding:"11px 0", fontFamily:"'Bebas Neue',sans-serif", fontSize:18, letterSpacing:2, cursor:"pointer" }}>
-                    START CROWD VOTE
-                  </button>
-                )}
-
-                {/* vote bars */}
-                {voting && (
-                  <div style={{ background:"rgba(0,0,0,0.8)", backdropFilter:"blur(14px)", borderRadius:12, padding:14, border:`1px solid ${mode.color}33` }}>
-                    <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:"#444", letterSpacing:2, marginBottom:10 }}>CROWD VOTE</div>
-                    <VoteBar label="you 🇳🇵"    pct={myVotePct}  color="#00f5a0" isMe />
-                    <VoteBar label={`${opponent.name} ${opponent.flag}`} pct={oppVotePct} color="#ff4d6d" />
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* ── ROUND RESULT ── */}
-            {phase==="roundResult" && (
-              <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:12, background:"rgba(8,8,9,0.88)", zIndex:10, animation:"fadeIn 0.3s both" }}>
-                <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"clamp(48px,10vw,80px)", letterSpacing:4, lineHeight:1, color:roundResult==="win"?"#00f5a0":"#ff4d6d", textShadow:`0 0 40px ${roundResult==="win"?"rgba(0,245,160,0.7)":"rgba(255,77,109,0.7)"}`, animation:"winPop 0.5s both" }}>
-                  {roundResult==="win"?"YOU WIN!":"YOU LOSE"}
-                </div>
-                <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:12, color:"#444" }}>
-                  {round < TOTAL_ROUNDS ? `round ${round+1} starting...` : "wrapping up..."}
-                </div>
-              </div>
-            )}
+          {/* Your name tag — bottom right */}
+          <div style={{ position:"absolute", bottom:80, right:12, display:"flex", alignItems:"center", gap:8, background:"rgba(0,0,0,0.72)", backdropFilter:"blur(12px)", borderRadius:10, padding:"7px 12px", border:"1px solid rgba(0,245,160,0.2)", flexDirection:"row-reverse", zIndex:5 }}>
+            <span style={{ fontSize:16 }}>{myFlag}</span>
+            <div style={{ textAlign:"right" }}>
+              <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:12, color:"#00f5a0", fontWeight:600 }}>{myUsername}</div>
+              <div style={{ fontSize:10, color:rankColor(myPoints) }}>{getRank(myPoints)} · {myPoints.toLocaleString()} pts</div>
+            </div>
           </div>
+
+          {/* ── GAME PROMPT — overlaid on your cam, bottom center ── */}
+          {phase==="playing" && (
+            <div style={{ position:"absolute", bottom:80, left:"50%", transform:"translateX(-50%)", width:"calc(100% - 24px)", zIndex:7 }}>
+
+              {/* Don't Laugh / Vibe Check / Hot Take prompt */}
+              {(gameMode==="dontlaugh"||gameMode==="vibecheck"||gameMode==="hottake") && !voting && (
+                <div style={{ background:"rgba(0,0,0,0.82)", backdropFilter:"blur(16px)", borderRadius:14, padding:"12px 16px", border:`1px solid ${mode.color}33` }}>
+                  <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:9, color:mode.color, letterSpacing:2, marginBottom:5 }}>
+                    {gameMode==="dontlaugh"?"IMAGINE THIS:":gameMode==="hottake"?"HOT TAKE:":"YOUR VIBE:"}
+                  </div>
+                  <div style={{ fontSize:"clamp(12px,2.5vw,15px)", fontWeight:600, color:"#f0eeea", lineHeight:1.5 }}>{currentPrompt}</div>
+                </div>
+              )}
+
+              {/* Mirror Me controls */}
+              {gameMode==="mirrorme" && (
+                <div style={{ background:"rgba(0,0,0,0.82)", backdropFilter:"blur(16px)", borderRadius:14, padding:"12px 16px", border:`1px solid ${mode.color}33` }}>
+                  <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:9, color:mode.color, letterSpacing:2, marginBottom:5 }}>
+                    {mirrorPhase==="pose"?"MAKE THIS FACE:":"NOW COPY IT:"}
+                  </div>
+                  <div style={{ fontSize:14, fontWeight:600, color:"#f0eeea", marginBottom:mirrorPhase==="pose"?10:0 }}>{currentPrompt}</div>
+                  {mirrorPhase==="pose" && (
+                    <button onClick={captureMyPose} style={{ background:`linear-gradient(135deg,${mode.color},#00d4ff)`, color:"#0a0a0a", border:"none", borderRadius:8, padding:"8px 20px", fontFamily:"'Bebas Neue',sans-serif", fontSize:15, letterSpacing:2, cursor:"pointer" }}>
+                      CAPTURE POSE
+                    </button>
+                  )}
+                  {myMirrorScore!==null && (
+                    <div style={{ marginTop:6, fontFamily:"'Bebas Neue',sans-serif", fontSize:22, color:mode.color }}>Accuracy: {myMirrorScore}/100</div>
+                  )}
+                </div>
+              )}
+
+              {/* Crowd vote trigger */}
+              {(gameMode==="vibecheck"||gameMode==="hottake") && !voting && timer<=mode.duration-5 && (
+                <button onClick={triggerVote} style={{ marginTop:8, width:"100%", background:`linear-gradient(135deg,${mode.color},#a064ff)`, color:"#0a0a0a", border:"none", borderRadius:12, padding:"12px 0", fontFamily:"'Bebas Neue',sans-serif", fontSize:17, letterSpacing:2, cursor:"pointer" }}>
+                  START CROWD VOTE
+                </button>
+              )}
+
+              {/* Vote bars */}
+              {voting && (
+                <div style={{ background:"rgba(0,0,0,0.85)", backdropFilter:"blur(16px)", borderRadius:14, padding:14, border:`1px solid ${mode.color}33` }}>
+                  <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:9, color:"#444", letterSpacing:2, marginBottom:10 }}>CROWD VOTE</div>
+                  <VoteBar label={`${myUsername} ${myFlag}`}       pct={myVotePct}  color="#00f5a0" isMe />
+                  <VoteBar label={`${opponent.username} ${opponent.flag}`} pct={oppVotePct} color="#ff4d6d" />
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── INTRO OVERLAY on your cam ── */}
+          {phase==="intro" && (
+            <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:14, background:"rgba(8,8,9,0.78)", zIndex:10, animation:"fadeIn 0.3s both" }}>
+              <div style={{ fontSize:52 }}>{mode.emoji}</div>
+              <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"clamp(28px,6vw,44px)", letterSpacing:3, color:mode.color, textShadow:`0 0 30px ${mode.color}` }}>{mode.label.toUpperCase()}</div>
+              <div style={{ fontSize:13, color:"#555", textAlign:"center", maxWidth:260, lineHeight:1.6, padding:"0 20px" }}>{mode.desc}</div>
+              <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#333", letterSpacing:2, animation:"pulse 1.5s infinite" }}>starting round 1...</div>
+            </div>
+          )}
+
+          {/* ── LOADING OVERLAY ── */}
+          {phase==="loading" && (
+            <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:16, background:"rgba(8,8,9,0.96)", zIndex:10 }}>
+              <div style={{ width:50, height:50, borderRadius:"50%", border:"2px solid transparent", borderTopColor:"#00f5a0", borderRightColor:"#00d4ff", animation:"spinRing 1s linear infinite" }} />
+              <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:20, letterSpacing:3, color:"#00f5a0" }}>SETTING UP</div>
+              <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#444", textAlign:"center", maxWidth:240, padding:"0 20px" }}>{loadStatus}</div>
+            </div>
+          )}
         </div>
 
-        {/* ── RIGHT SIDEBAR ── */}
-        <div style={{ display:"flex", flexDirection:"column", gap:10, overflow:"hidden" }}>
+        {/* ── BOTTOM CONTROL BAR — fixed over both cams ── */}
+        <div style={{ position:"absolute", bottom:0, left:0, right:0, height:68, display:"flex", alignItems:"center", justifyContent:"center", gap:14, background:"linear-gradient(to top, rgba(8,8,9,0.95), transparent)", zIndex:20, padding:"0 20px" }}>
 
-          {/* mode info */}
-          <div style={{ background:"rgba(255,255,255,0.025)", border:"1px solid rgba(255,255,255,0.06)", borderRadius:14, padding:14, animation:"fadeUp 0.4s both" }}>
-            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10 }}>
-              <span style={{ fontSize:24 }}>{mode.emoji}</span>
-              <div>
-                <div style={{ fontSize:13, fontWeight:600, color:mode.color }}>{mode.label}</div>
-                <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:"#444" }}>round {round}/{TOTAL_ROUNDS}</div>
-              </div>
-            </div>
-            <div style={{ fontSize:12, color:"#3a3a3f", lineHeight:1.5, marginBottom:10 }}>{mode.desc}</div>
-            <div style={{ padding:"8px 12px", background:"rgba(255,214,10,0.07)", border:"1px solid rgba(255,214,10,0.14)", borderRadius:10, fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#ffd60a" }}>
-              🏆 {entryFee*2} pts pot
-            </div>
-          </div>
+          {/* Mute */}
+          <button onClick={toggleMute} style={{ width:48, height:48, borderRadius:"50%", background:muted?"rgba(255,77,109,0.2)":"rgba(255,255,255,0.08)", border:`1.5px solid ${muted?"rgba(255,77,109,0.5)":"rgba(255,255,255,0.12)"}`, color:"#f0eeea", fontSize:20, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", transition:"all 0.2s" }}>
+            {muted?"🔇":"🎤"}
+          </button>
 
-          {/* round tracker */}
-          <div style={{ background:"rgba(255,255,255,0.025)", border:"1px solid rgba(255,255,255,0.06)", borderRadius:14, padding:14 }}>
-            <div style={{ fontSize:10, color:"#444", letterSpacing:3, textTransform:"uppercase", marginBottom:12 }}>rounds</div>
-            {Array.from({length:TOTAL_ROUNDS}).map((_,i)=>{
-              const s = myRoundScores[i];
-              const active = i+1===round && phase==="playing";
-              return (
-                <div key={i} style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
-                  <div style={{ width:6, height:6, borderRadius:"50%", background:s==="win"?"#00f5a0":s==="loss"?"#ff4d6d":active?"rgba(255,255,255,0.3)":"rgba(255,255,255,0.08)", boxShadow:s?`0 0 6px ${s==="win"?"#00f5a0":"#ff4d6d"}`:active?"0 0 6px rgba(255,255,255,0.3)":"none", transition:"all 0.3s" }} />
-                  <div style={{ fontSize:12, color:s?"#d0cec8":active?"#888":"#333" }}>
-                    Round {i+1} {s?(s==="win"?"· won":"· lost"):active?"· now playing":"· upcoming"}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+          {/* Cam toggle */}
+          <button onClick={toggleCam} style={{ width:48, height:48, borderRadius:"50%", background:camOff?"rgba(255,77,109,0.2)":"rgba(255,255,255,0.08)", border:`1.5px solid ${camOff?"rgba(255,77,109,0.5)":"rgba(255,255,255,0.12)"}`, color:"#f0eeea", fontSize:20, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", transition:"all 0.2s" }}>
+            {camOff?"🚫":"📷"}
+          </button>
 
-          {/* opponent */}
-          <div style={{ background:"rgba(255,255,255,0.025)", border:"1px solid rgba(255,255,255,0.06)", borderRadius:14, padding:14 }}>
-            <div style={{ fontSize:10, color:"#444", letterSpacing:3, textTransform:"uppercase", marginBottom:10 }}>opponent</div>
-            <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-              <div style={{ width:36, height:36, borderRadius:"50%", background:"rgba(255,77,109,0.1)", border:"1px solid rgba(255,77,109,0.25)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:18 }}>{opponent.avatar}</div>
-              <div>
-                <div style={{ fontSize:13, fontWeight:600 }}>{opponent.name} {opponent.flag}</div>
-                <div style={{ fontSize:11, color:rankColor(opponent.pts) }}>{getRank(opponent.pts)} · {opponent.pts.toLocaleString()} pts</div>
-              </div>
-            </div>
-          </div>
+          {/* Reaction buttons */}
+          {["😂","🔥","😮"].map(e=>(
+            <button key={e} onClick={()=>addReaction(e)} style={{ width:44, height:44, borderRadius:"50%", background:"rgba(255,255,255,0.06)", border:"1.5px solid rgba(255,255,255,0.1)", fontSize:18, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", transition:"transform 0.15s" }}
+              onMouseEnter={ev=>ev.currentTarget.style.transform="scale(1.2)"}
+              onMouseLeave={ev=>ev.currentTarget.style.transform="scale(1)"}
+            >{e}</button>
+          ))}
 
-          {/* crowd */}
-          <div style={{ background:"rgba(255,255,255,0.025)", border:"1px solid rgba(255,255,255,0.06)", borderRadius:14, padding:14, flex:1, position:"relative", overflow:"hidden" }}>
-            <div style={{ fontSize:10, color:"#444", letterSpacing:3, textTransform:"uppercase", marginBottom:10 }}>👀 crowd (84)</div>
-            {[["🧑","alex_k"],["👩","priya_s"],["🐉","dragonz"]].map(([av,n])=>(
-              <div key={n} style={{ display:"flex", alignItems:"center", gap:7, marginBottom:7 }}>
-                <div style={{ width:22, height:22, borderRadius:"50%", background:"rgba(255,255,255,0.05)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:11 }}>{av}</div>
-                <span style={{ fontSize:11, color:"#555" }}>{n}</span>
-              </div>
-            ))}
-            <div style={{ fontSize:10, color:"#2a2a2f", marginBottom:10 }}>+81 more watching</div>
-            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:5 }}>
-              {["😂","🔥","💀","🤣","👏","😮"].map(e=>(
-                <button key={e} onClick={()=>addReaction(e)} style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.06)", borderRadius:7, padding:"7px 0", fontSize:15, cursor:"pointer", transition:"transform 0.15s" }}
-                  onMouseEnter={ev=>ev.currentTarget.style.transform="scale(1.2)"}
-                  onMouseLeave={ev=>ev.currentTarget.style.transform="scale(1)"}
-                >{e}</button>
-              ))}
-            </div>
-            {reactions.map(r=>(
-              <div key={r.id} style={{ position:"absolute", bottom:"18%", left:`${r.x}%`, fontSize:26, animation:"floatUp 2.2s forwards", pointerEvents:"none" }}>{r.emoji}</div>
-            ))}
+          {/* Hang up — big red, center */}
+          <button onClick={()=>{cleanup();if(roomId)socket.emit("match:leave",{roomId});if(onBack)onBack();}} style={{ width:58, height:58, borderRadius:"50%", background:"#ff4d6d", border:"none", fontSize:22, cursor:"pointer", boxShadow:"0 0 28px rgba(255,77,109,0.5)", display:"flex", alignItems:"center", justifyContent:"center" }}>📵</button>
+
+          {/* Entry fee pot */}
+          <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#ffd60a", background:"rgba(255,214,10,0.07)", border:"1px solid rgba(255,214,10,0.18)", borderRadius:20, padding:"5px 12px" }}>
+            🏆 {entryFee*2} pts
           </div>
         </div>
       </div>
@@ -776,7 +1094,6 @@ export default function GameScreen({
           <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"clamp(56px,12vw,96px)", letterSpacing:4, lineHeight:1, color:matchWon?"#00f5a0":"#ff4d6d", textShadow:`0 0 60px ${matchWon?"rgba(0,245,160,0.7)":"rgba(255,77,109,0.7)"}`, animation:"winPop 0.6s both" }}>
             {matchWon?"YOU WIN 🎉":"YOU LOSE 💀"}
           </div>
-
           <div style={{ display:"flex", gap:12, flexWrap:"wrap", justifyContent:"center" }}>
             {[["rounds won",myScore,"#00f5a0"],["rounds lost",oppScore,"#ff4d6d"],["pts pot",entryFee*2,"#ffd60a"]].map(([l,v,c])=>(
               <div key={l} style={{ textAlign:"center", background:"rgba(255,255,255,0.025)", border:"1px solid rgba(255,255,255,0.06)", borderRadius:14, padding:"14px 20px" }}>
@@ -785,14 +1102,12 @@ export default function GameScreen({
               </div>
             ))}
           </div>
-
           <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:14, color:matchWon?"#ffd60a":"#ff4d6d", background:matchWon?"rgba(255,214,10,0.08)":"rgba(255,77,109,0.08)", border:`1px solid ${matchWon?"rgba(255,214,10,0.2)":"rgba(255,77,109,0.2)"}`, borderRadius:12, padding:"11px 28px" }}>
-            {matchWon ? `+${entryFee} pts earned` : `-${entryFee} pts lost`}
+            {matchWon?`+${entryFee} pts earned`:`-${entryFee} pts lost`}
           </div>
-
           <div style={{ display:"flex", gap:12, flexWrap:"wrap", justifyContent:"center" }}>
             <button onClick={playAgain} style={{ background:"linear-gradient(135deg,#00f5a0,#00d4ff)", color:"#0a0a0a", border:"none", borderRadius:12, padding:"13px 32px", fontFamily:"'Bebas Neue',sans-serif", fontSize:20, letterSpacing:2, cursor:"pointer", boxShadow:"0 0 30px rgba(0,245,160,0.35)" }}>PLAY AGAIN</button>
-            {onBack && <button onClick={()=>{ cleanup(); onBack(); }} style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:12, padding:"13px 24px", color:"#555", fontSize:14, cursor:"pointer" }}>Exit</button>}
+            {onBack && <button onClick={()=>{cleanup();onBack();}} style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:12, padding:"13px 24px", color:"#555", fontSize:14, cursor:"pointer" }}>Exit</button>}
           </div>
         </div>
       )}

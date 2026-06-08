@@ -680,17 +680,28 @@ export default function StrangerPlay() {
       {/* GameSection = Floppy Face Race — triggered from Games nav */}
       {page === "games"      && <GameSection onBack={() => goTo("home")} myPoints={74} />}
 
-      {/* GameScreen = live in-match UI — triggered after matchmaking */}
-      {page === "gamescreen" && (
+      {/* GameScreen = live in-match UI — gets real opponent data from matchInfo (set by socket match:found event) */}
+      {page === "gamescreen" && matchInfo && (
         <GameScreen
-          game="dont_laugh"
-          onBack={() => goTo("play")}
-          myName="raj_np"
-          myFlag="🇳🇵"
-          myPoints={74}
-          oppName="stranger_7829"
-          oppFlag="🇧🇷"
-          pointsWagered={3}
+          gameMode={matchInfo.gameMode}
+          roomId={matchInfo.roomId}
+          role={matchInfo.role}
+          opponent={matchInfo.opponent}
+          entryFee={matchInfo.entryFee}
+          myPoints={points}
+          myUsername={user?.username || "anon"}
+          myFlag={user?.flag || "🌍"}
+          onBack={() => { setMatchState("idle"); setMatchInfo(null); goTo("play"); }}
+          onMatchEnd={(won, fee) => {
+            // Update local points immediately — server also updates DB
+            setPoints(p => won ? p + fee : Math.max(0, p - fee));
+            // Update localStorage so the new points survive refresh
+            const saved = JSON.parse(localStorage.getItem("sp_user") || "{}");
+            localStorage.setItem("sp_user", JSON.stringify({
+              ...saved,
+              points: won ? (saved.points||0) + fee : Math.max(0, (saved.points||0) - fee)
+            }));
+          }}
         />
       )}
 
