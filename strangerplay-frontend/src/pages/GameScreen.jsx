@@ -1,32 +1,34 @@
 /**
  * GameScreen.jsx — StrangerPlay
  *
- * TWO COMPLETELY DIFFERENT LAYOUTS:
+ * Full live in-match UI for 4 game modes:
+ *   Don't Laugh · Vibe Check · Mirror Me · Hot Take
  *
- * 1. PLAYER layout  (isPlayer=true, default)
- *    — You are IN the game
- *    — Fullscreen: opponent fills the whole screen, YOUR cam is big (not tiny PIP)
- *    — Bottom control bar with mute/cam/hang-up
- *    — Game prompts overlay at bottom
- *    — Score bar at top, timer in center
- *    — Mobile: vertical stack, both cams 50/50 height
+ * Architecture:
+ *   - BlazeFace runs in setInterval (async, 33ms) → writes to faceTrack ref
+ *   - rAF renderLoop reads faceTrack synchronously → draws overlay canvas
+ *   - NEVER mix await inside rAF (learned from GameSection bug)
+ *   - Socket calls are stubbed via socketEmit() — plug real socket later
+ *   - Round system: best of 3, phases: intro → playing → roundResult → matchResult
  *
- * 2. SPECTATOR layout (isPlayer=false)
- *    — You are WATCHING two strangers play
- *    — TikTok-style: both players side by side, equal width
- *    — Right panel: live reaction bar + emoji buttons
- *    — Left panel: scrolling chat / crowd comments
- *    — Score ticker at top like a sports broadcast
- *    — No controls. No camera access. Pure viewer experience.
- *
- * Architecture rules (never break):
- *   - NEVER put await inside requestAnimationFrame
- *   - setInterval(async) writes to ref → rAF reads ref synchronously
- *   - canvas.width must be set from getBoundingClientRect(), not CSS
+ * Props:
+ *   gameMode   — "dontlaugh" | "vibecheck" | "mirrorme" | "hottake"
+ *   opponent   — { name, flag, avatar, pts }
+ *   entryFee   — number (points wagered)
+ *   myPoints   — number
+ *   onBack     — function
  */
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { socket } from "../socket";
+
+function socketEmit(event, data) {
+  if (socket && socket.connected) {
+    socket.emit(event, data);
+  } else {
+    console.log("[socket stub]", event, data);
+  }
+}
 
 /* ─────────────────────────────────────────────
    CONSTANTS
@@ -38,20 +40,39 @@ const VOTE_DURATION   = 5;
 const INTRO_DURATION  = 2000;
 const RESULT_DURATION = 3000;
 const TOTAL_ROUNDS    = 3;
-const SMILE_THRESHOLD = 0.38;
-const FACE_INTERVAL   = 33;
+const FACE_INTERVAL   = 80;   // MediaPipe is heavier, 80ms is fine (~12fps detection)
 
-const CDN_TF    = "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.11.0/dist/tf.min.js";
-const CDN_BLAZE = "https://cdn.jsdelivr.net/npm/@tensorflow-models/blazeface@0.1.0/dist/blazeface.min.js";
+/*
+  MEDIAPIPE FACE MESH
+  468 facial landmarks — production quality, same as Google Meet.
+  BlazeFace only gave us 6 landmarks. MediaPipe gives us exact lip geometry.
+  
+  Smile detection works on:
+    Upper lip center  → landmark 13
+    Lower lip center  → landmark 14
+    Left mouth corner → landmark 61
+    Right mouth corner→ landmark 291
+    Left eye outer    → landmark 33
+    Right eye outer   → landmark 263
+  
+  Mouth Aspect Ratio (MAR) = vertical mouth gap / horizontal mouth width
+  Neutral mouth MAR ≈ 0.0 – 0.1
+  Smile / open mouth MAR ≈ 0.3+
+*/
+const SMILE_MAR_THRESHOLD = 0.28;  // tune lower = more sensitive, higher = less
+
+const CDN_FACEMESH = "https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js";
+const CDN_CAMERA   = "https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js";
+const CDN_DRAWING  = "https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js";
 
 /* ─────────────────────────────────────────────
    GAME MODE CONFIG
 ───────────────────────────────────────────── */
 const MODES = {
   dontlaugh: {
-    label:"Don't Laugh", emoji:"😐", color:"#00f5a0", duration:20,
-    desc:"Keep a straight face. Smile = you lose the round.",
-    prompts:[
+    label: "Don't Laugh", emoji: "😐", color: "#00f5a0", duration: 20,
+    desc: "Keep a straight face. Smile = you lose the round.",
+    prompts: [
       "Imagine your grandma doing the floss dance",
       "A cat slowly falling off a table in slow motion",
       "Your teacher trying to use TikTok for the first time",
@@ -60,9 +81,9 @@ const MODES = {
     ],
   },
   vibecheck: {
-    label:"Vibe Check", emoji:"🎭", color:"#ff4d6d", duration:15,
-    desc:"Act out the vibe. Crowd votes who nailed it.",
-    prompts:[
+    label: "Vibe Check", emoji: "🎭", color: "#ff4d6d", duration: 15,
+    desc: "Act out the vibe. Crowd votes who nailed it.",
+    prompts: [
       "You just won the lottery but you're trying to act normal",
       "You are a robot that just discovered human emotions",
       "You are a very dramatic grandma at a soap opera funeral",
@@ -71,9 +92,9 @@ const MODES = {
     ],
   },
   mirrorme: {
-    label:"Mirror Me", emoji:"🪞", color:"#00d4ff", duration:10,
-    desc:"Copy the pose exactly. AI scores your accuracy.",
-    poses:[
+    label: "Mirror Me", emoji: "🪞", color: "#00d4ff", duration: 10,
+    desc: "Copy the pose exactly. AI scores your accuracy.",
+    poses: [
       "Raise both eyebrows as high as humanly possible",
       "Puff out your cheeks like a balloon about to pop",
       "Make the most confused face you have ever made",
@@ -82,9 +103,9 @@ const MODES = {
     ],
   },
   hottake: {
-    label:"Hot Take", emoji:"🌶️", color:"#ffd60a", duration:15,
-    desc:"React to the take in 5 seconds. Crowd picks best reaction.",
-    prompts:[
+    label: "Hot Take", emoji: "🌶️", color: "#ffd60a", duration: 15,
+    desc: "React to the take in 5 seconds. Crowd picks best reaction.",
+    prompts: [
       "Pineapple on pizza is actually really good",
       "Sleeping is a complete waste of time",
       "Cats are objectively better than dogs",
@@ -106,21 +127,63 @@ function loadScript(src) {
   });
 }
 
-function getMouthOpenness(lm) {
-  if (!lm || lm.length < 4) return 0;
-  const nose = lm[2], mouth = lm[3], eyeL = lm[1];
-  const faceH = Math.abs(eyeL[1] - mouth[1]) || 1;
-  return Math.abs(mouth[1] - nose[1]) / faceH;
+/*
+  MOUTH ASPECT RATIO from MediaPipe landmarks
+  
+  lm = array of 468 {x, y, z} objects (x/y are 0-1 normalized)
+  
+  MAR = (top-bottom gap) / (left-right width)
+  
+  Landmarks used:
+    13  = upper lip center
+    14  = lower lip center  
+    61  = left mouth corner
+    291 = right mouth corner
+  
+  When mouth is closed/neutral: top ≈ bottom → MAR near 0
+  When smiling with open mouth: big gap → MAR ≈ 0.3-0.5
+  When smiling tight (no teeth): corners pull back but gap stays small
+  
+  We combine MAR with corner distance ratio for tight smiles too.
+*/
+function getMouthAspectRatio(lm) {
+  if (!lm || lm.length < 292) return 0;
+  const upper  = lm[13];
+  const lower  = lm[14];
+  const leftC  = lm[61];
+  const rightC = lm[291];
+  const vertical   = Math.abs(upper.y - lower.y);
+  const horizontal = Math.abs(leftC.x - rightC.x) || 0.001;
+  return vertical / horizontal;
 }
 
+/*
+  CHEEK RAISE DETECTION — catches tight smiles (no open mouth)
+  Landmark 50 = left cheek, 280 = right cheek
+  Landmark 33 = left eye outer, 263 = right eye outer
+  When cheeks raise, they move closer to eyes
+*/
+function getCheekRaise(lm) {
+  if (!lm || lm.length < 292) return 0;
+  const leftEye   = lm[33];
+  const leftCheek = lm[50];
+  const refDist   = Math.abs(lm[10].y - lm[152].y) || 0.001; // forehead to chin
+  return 1 - (Math.abs(leftEye.y - leftCheek.y) / refDist);
+}
+
+// Mirror Me: compare two sets of MediaPipe landmarks (468 points)
 function mirrorScore(lm1, lm2) {
-  if (!lm1 || !lm2 || lm1.length < 4) return 50;
+  if (!lm1 || !lm2 || lm1.length < 10) return 50;
   let diff = 0;
-  for (let i = 0; i < Math.min(lm1.length, lm2.length); i++) {
-    const dx = lm1[i][0]-lm2[i][0], dy = lm1[i][1]-lm2[i][1];
-    diff += Math.sqrt(dx*dx+dy*dy);
+  // Sample 20 evenly spaced landmarks — enough for accuracy, fast to compute
+  const step = Math.floor(lm1.length / 20);
+  for (let i = 0; i < lm1.length; i += step) {
+    if (!lm2[i]) continue;
+    const dx = lm1[i].x - lm2[i].x;
+    const dy = lm1[i].y - lm2[i].y;
+    diff += Math.sqrt(dx*dx + dy*dy);
   }
-  return Math.max(0, Math.round(100 - diff/2));
+  return Math.max(0, Math.round(100 - diff * 80));
 }
 
 function getRank(pts) {
@@ -140,66 +203,6 @@ function rankColor(pts) {
 }
 
 /* ─────────────────────────────────────────────
-   SMALL COMPONENTS
-───────────────────────────────────────────── */
-function RoundDots({ total, scores }) {
-  return (
-    <div style={{ display:"flex", gap:7, alignItems:"center" }}>
-      {Array.from({length:total}).map((_,i) => {
-        const s = scores[i];
-        const col = s==="win"?"#00f5a0":s==="loss"?"#ff4d6d":"rgba(255,255,255,0.1)";
-        return <div key={i} style={{ width:9, height:9, borderRadius:"50%", background:col, boxShadow:s?`0 0 7px ${col}`:"none", transition:"all 0.3s" }} />;
-      })}
-    </div>
-  );
-}
-
-function TimerRing({ seconds, total, color }) {
-  const r = 26, circ = 2*Math.PI*r;
-  const danger = seconds <= 5;
-  return (
-    <div style={{ position:"relative", width:70, height:70, flexShrink:0 }}>
-      <svg width="70" height="70" style={{ transform:"rotate(-90deg)" }}>
-        <circle cx="35" cy="35" r={r} fill="none" stroke="rgba(255,255,255,0.07)" strokeWidth="3" />
-        <circle cx="35" cy="35" r={r} fill="none"
-          stroke={danger?"#ff4d6d":color} strokeWidth="3"
-          strokeDasharray={circ}
-          strokeDashoffset={circ - circ*(seconds/total)}
-          strokeLinecap="round"
-          style={{ transition:"stroke-dashoffset 1s linear, stroke 0.3s" }}
-        />
-      </svg>
-      <div style={{
-        position:"absolute", inset:0, display:"flex", alignItems:"center", justifyContent:"center",
-        fontFamily:"'Bebas Neue',sans-serif", fontSize:22,
-        color:danger?"#ff4d6d":"#f0eeea",
-        textShadow:danger?"0 0 10px rgba(255,77,109,0.7)":"none",
-        animation:danger?"timerTick 1s infinite":"none",
-      }}>{seconds}</div>
-    </div>
-  );
-}
-
-function VoteBar({ label, pct, color, isMe }) {
-  return (
-    <div style={{ marginBottom:10 }}>
-      <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:5, color:isMe?color:"#555" }}>
-        <span>{label}</span>
-        <span style={{ fontFamily:"'JetBrains Mono',monospace" }}>{Math.round(pct)}%</span>
-      </div>
-      <div style={{ background:"rgba(255,255,255,0.06)", borderRadius:4, height:8, overflow:"hidden" }}>
-        <div style={{
-          height:"100%", borderRadius:4, width:`${pct}%`,
-          background:`linear-gradient(90deg,${color},${color}88)`,
-          boxShadow:isMe?`0 0 10px ${color}55`:"none",
-          transition:"width 0.8s ease",
-        }} />
-      </div>
-    </div>
-  );
-}
-
-/* ─────────────────────────────────────────────
    CSS
 ───────────────────────────────────────────── */
 const CSS = `
@@ -207,510 +210,341 @@ const CSS = `
 *{box-sizing:border-box;margin:0;padding:0;}
 ::-webkit-scrollbar{width:4px}
 ::-webkit-scrollbar-thumb{background:rgba(255,255,255,.08);border-radius:2px}
-@keyframes fadeUp    {from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
-@keyframes fadeIn    {from{opacity:0}to{opacity:1}}
-@keyframes pulse     {0%,100%{opacity:1}50%{opacity:.35}}
-@keyframes glowP     {0%,100%{box-shadow:0 0 20px #00f5a044}50%{box-shadow:0 0 50px #00f5a099}}
-@keyframes spinRing  {to{transform:rotate(360deg)}}
-@keyframes floatUp   {0%{opacity:1;transform:translateY(0)}100%{opacity:0;transform:translateY(-100px)}}
-@keyframes timerTick {0%{transform:scale(1.15)}100%{transform:scale(1)}}
-@keyframes winPop    {0%{transform:scale(0.5);opacity:0}60%{transform:scale(1.1)}100%{transform:scale(1);opacity:1}}
-@keyframes smileWarn {0%,100%{opacity:1}50%{opacity:0.15}}
-@keyframes chatSlide {from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
-@keyframes livePing  {0%{transform:scale(1)}50%{transform:scale(1.4)}100%{transform:scale(1)}}
-@keyframes scoreFlash{0%{color:#ffd60a;transform:scale(1.3)}100%{color:inherit;transform:scale(1)}}
-
-/* Player layout — cams stack on mobile */
-.player-grid {
-  display: grid;
-  grid-template-rows: 1fr 1fr;
-  height: calc(100vh - 58px);
-}
-@media(min-width:640px){
-  .player-grid {
-    grid-template-rows: 1fr;
-    grid-template-columns: 1fr 1fr;
-  }
-}
-
-/* Spectator layout — side by side always, reaction panel on right */
-.spectator-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr 52px;
-  height: calc(100vh - 58px);
-}
-@media(max-width:600px){
-  .spectator-grid {
-    grid-template-columns: 1fr 1fr;
-    grid-template-rows: 1fr auto;
-  }
-  .spec-right { display: none; }
-}
+@keyframes fadeUp   {from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
+@keyframes fadeIn   {from{opacity:0}to{opacity:1}}
+@keyframes pulse    {0%,100%{opacity:1}50%{opacity:.35}}
+@keyframes glowP    {0%,100%{box-shadow:0 0 20px #00f5a044}50%{box-shadow:0 0 50px #00f5a099}}
+@keyframes spinRing {to{transform:rotate(360deg)}}
+@keyframes floatUp  {0%{opacity:1;transform:translateY(0)}100%{opacity:0;transform:translateY(-80px)}}
+@keyframes timerTick{0%{transform:scale(1.15)}100%{transform:scale(1)}}
+@keyframes slideIn  {from{opacity:0;transform:translateX(-10px)}to{opacity:1;transform:translateX(0)}}
+@keyframes winPop   {0%{transform:scale(0.5);opacity:0}60%{transform:scale(1.1)}100%{transform:scale(1);opacity:1}}
+@keyframes smileWarn{0%,100%{opacity:1}50%{opacity:0.15}}
+@keyframes voteGrow {from{width:0}to{width:var(--w)}}
 `;
 
 /* ─────────────────────────────────────────────
-   SPECTATOR VIEW
-   Completely separate component — no camera,
-   no game logic, pure watching experience
+   SMALL COMPONENTS
 ───────────────────────────────────────────── */
-function SpectatorView({ gameMode, player1, player2, onBack }) {
-  const mode = MODES[gameMode] || MODES.dontlaugh;
 
-  // Fake scores for demo — in production these come via socket broadcast
-  const [score1, setScore1] = useState(0);
-  const [score2, setScore2] = useState(0);
-  const [timer,  setTimer]  = useState(mode.duration);
-  const [round,  setRound]  = useState(1);
-
-  // Reactions that float up on screen
-  const [reactions, setReactions] = useState([]);
-
-  // Live chat messages — in production come via socket
-  const [chat, setChat] = useState([
-    { id:1, user:"alex_k",   flag:"🇺🇸", msg:"this is hilarious 😂",      color:"#00f5a0" },
-    { id:2, user:"priya_s",  flag:"🇮🇳", msg:"left guy is cracking",       color:"#00d4ff" },
-    { id:3, user:"marco_r",  flag:"🇧🇷", msg:"no way he holds it 💀",      color:"#ff4d6d" },
-    { id:4, user:"dragonz",  flag:"🇨🇳", msg:"LMAOOO",                     color:"#ffd60a" },
-    { id:5, user:"nite_owl", flag:"🇬🇧", msg:"right guy looking nervous",   color:"#a78bfa" },
-  ]);
-  const chatRef = useRef(null);
-
-  // Countdown timer for display
-  useEffect(() => {
-    const iv = setInterval(() => {
-      setTimer(t => {
-        if (t <= 1) { clearInterval(iv); return 0; }
-        return t - 1;
-      });
-    }, 1000);
-    return () => clearInterval(iv);
-  }, [round]);
-
-  // Fake chat messages rolling in — in prod these are socket events
-  useEffect(() => {
-    const msgs = [
-      { user:"fan_99",   flag:"🇰🇷", msg:"he's gonna smile any second",  color:"#00f5a0" },
-      { user:"watcher",  flag:"🇩🇪", msg:"😂😂😂",                         color:"#ff4d6d" },
-      { user:"lurk3r",   flag:"🇯🇵", msg:"10 points on right guy",        color:"#ffd60a" },
-      { user:"spectate", flag:"🇳🇵", msg:"this is StrangerPlay at its best", color:"#00d4ff" },
-    ];
-    let i = 0;
-    const iv = setInterval(() => {
-      if (i >= msgs.length) return;
-      const msg = { ...msgs[i], id: Date.now() };
-      setChat(c => [...c.slice(-20), msg]);
-      i++;
-      // Auto scroll chat to bottom
-      if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
-    }, 2800);
-    return () => clearInterval(iv);
-  }, []);
-
-  const addReaction = (emoji) => {
-    const id = Date.now();
-    setReactions(r => [...r, { id, emoji, x: Math.random()*80+10, side: Math.random()>0.5?"left":"right" }]);
-    setTimeout(() => setReactions(r => r.filter(rx=>rx.id!==id)), 2500);
-    socket.emit("reaction", { emoji });
-  };
-
-  const danger = timer <= 5;
-
+function RoundDots({ total, scores }) {
   return (
-    <div style={{ minHeight:"100vh", background:BG, color:"#f0eeea", fontFamily:"'Syne',sans-serif", display:"flex", flexDirection:"column" }}>
-      <style>{CSS}</style>
+    <div style={{ display: "flex", gap: 7, alignItems: "center" }}>
+      {Array.from({ length: total }).map((_, i) => {
+        const s = scores[i];
+        const col = s === "win" ? "#00f5a0" : s === "loss" ? "#ff4d6d" : "rgba(255,255,255,0.1)";
+        return <div key={i} style={{ width: 9, height: 9, borderRadius: "50%", background: col, boxShadow: s ? `0 0 7px ${col}` : "none", transition: "all 0.3s" }} />;
+      })}
+    </div>
+  );
+}
 
-      {/* ── NAV — spectator style ── */}
-      <nav style={{ height:58, display:"flex", alignItems:"center", justifyContent:"space-between", padding:"0 16px", background:"rgba(14,14,15,0.95)", backdropFilter:"blur(24px)", borderBottom:"1px solid rgba(255,255,255,0.06)", flexShrink:0, zIndex:100 }}>
-        {/* Left: branding */}
-        <div style={{ display:"flex", alignItems:"center", gap:9 }}>
-          <div style={{ width:26, height:26, borderRadius:7, background:"linear-gradient(135deg,#00f5a0,#00d4ff)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, animation:"glowP 3s infinite" }}>▶</div>
-          <span style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:20, letterSpacing:3, background:"linear-gradient(90deg,#00f5a0,#00d4ff)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent" }}>StrangerPlay</span>
-          {/* LIVE badge */}
-          <div style={{ display:"flex", alignItems:"center", gap:5, background:"rgba(255,77,109,0.12)", border:"1px solid rgba(255,77,109,0.25)", borderRadius:20, padding:"3px 10px" }}>
-            <div style={{ width:6, height:6, borderRadius:"50%", background:"#ff4d6d", animation:"livePing 1s infinite" }} />
-            <span style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:"#ff4d6d", letterSpacing:1 }}>LIVE</span>
-          </div>
-        </div>
+function TimerRing({ seconds, total, color }) {
+  const r = 26, circ = 2 * Math.PI * r;
+  const danger = seconds <= 5;
+  return (
+    <div style={{ position: "relative", width: 70, height: 70, flexShrink: 0 }}>
+      <svg width="70" height="70" style={{ transform: "rotate(-90deg)" }}>
+        <circle cx="35" cy="35" r={r} fill="none" stroke="rgba(255,255,255,0.07)" strokeWidth="3" />
+        <circle cx="35" cy="35" r={r} fill="none"
+          stroke={danger ? "#ff4d6d" : color} strokeWidth="3"
+          strokeDasharray={circ}
+          strokeDashoffset={circ - circ * (seconds / total)}
+          strokeLinecap="round"
+          style={{ transition: "stroke-dashoffset 1s linear, stroke 0.3s" }}
+        />
+      </svg>
+      <div style={{
+        position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
+        fontFamily: "'Bebas Neue',sans-serif", fontSize: 22,
+        color: danger ? "#ff4d6d" : "#f0eeea",
+        textShadow: danger ? "0 0 10px rgba(255,77,109,0.7)" : "none",
+        animation: danger ? "timerTick 1s infinite" : "none",
+      }}>{seconds}</div>
+    </div>
+  );
+}
 
-        {/* Center: SPORTS SCOREBOARD — player1 vs player2 */}
-        <div style={{ display:"flex", alignItems:"center", gap:12, position:"absolute", left:"50%", transform:"translateX(-50%)" }}>
-          <div style={{ textAlign:"right" }}>
-            <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#00f5a0" }}>{player1?.username||"player 1"} {player1?.flag||"🌍"}</div>
-            <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:28, color:"#00f5a0", lineHeight:1, animation: score1>0?"scoreFlash 0.4s":"none" }}>{score1}</div>
-          </div>
-          <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:2 }}>
-            <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:9, color:"#333", letterSpacing:2 }}>VS</div>
-            {/* timer chip */}
-            <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:18, color:danger?"#ff4d6d":"#f0eeea", background:danger?"rgba(255,77,109,0.1)":"rgba(255,255,255,0.04)", border:`1px solid ${danger?"rgba(255,77,109,0.3)":"rgba(255,255,255,0.08)"}`, borderRadius:8, padding:"2px 10px", transition:"all 0.3s" }}>
-              {timer}s
-            </div>
-            <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:9, color:"#444" }}>R{round}/{TOTAL_ROUNDS}</div>
-          </div>
-          <div style={{ textAlign:"left" }}>
-            <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#ff4d6d" }}>{player2?.username||"player 2"} {player2?.flag||"🌍"}</div>
-            <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:28, color:"#ff4d6d", lineHeight:1 }}>{score2}</div>
-          </div>
-        </div>
-
-        {/* Right: mode + back */}
-        <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-          <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:mode.color, background:`${mode.color}10`, border:`1px solid ${mode.color}25`, borderRadius:20, padding:"3px 10px" }}>
-            {mode.emoji} {mode.label}
-          </div>
-          {onBack && <button onClick={onBack} style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:8, padding:"6px 14px", color:"#555", fontSize:12, cursor:"pointer" }}>← leave</button>}
-        </div>
-      </nav>
-
-      {/* ── BODY ── */}
-      <div className="spectator-grid" style={{ flex:1, position:"relative" }}>
-
-        {/* ── PLAYER 1 CAM (left) ── */}
-        <div style={{ position:"relative", background:"#050506", borderRight:"1px solid rgba(255,255,255,0.04)", overflow:"hidden" }}>
-          {/* Placeholder — in prod this is the WebRTC stream of player 1 */}
-          <div style={{ position:"absolute", inset:0, display:"flex", alignItems:"center", justifyContent:"center", flexDirection:"column", gap:10 }}>
-            <div style={{ width:72, height:72, borderRadius:"50%", background:"rgba(0,245,160,0.06)", border:"2px solid rgba(0,245,160,0.2)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:32 }}>🧑</div>
-            <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:12, color:"#00f5a0" }}>{player1?.username||"player 1"}</div>
-          </div>
-
-          {/* Name tag — bottom left overlay */}
-          <div style={{ position:"absolute", bottom:12, left:12, display:"flex", alignItems:"center", gap:7, background:"rgba(0,0,0,0.72)", backdropFilter:"blur(12px)", borderRadius:10, padding:"6px 12px", border:"1px solid rgba(0,245,160,0.2)" }}>
-            <span style={{ fontSize:14 }}>{player1?.flag||"🌍"}</span>
-            <div>
-              <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#00f5a0", fontWeight:600 }}>{player1?.username||"player 1"}</div>
-              <div style={{ fontSize:10, color:rankColor(player1?.points||0) }}>{getRank(player1?.points||0)} · {(player1?.points||0).toLocaleString()} pts</div>
-            </div>
-          </div>
-
-          {/* Score badge — top left */}
-          <div style={{ position:"absolute", top:12, left:12, fontFamily:"'Bebas Neue',sans-serif", fontSize:40, color:"#00f5a0", textShadow:"0 0 20px rgba(0,245,160,0.5)", lineHeight:1 }}>{score1}</div>
-
-          {/* Floating reactions on this player's side */}
-          {reactions.filter(r=>r.side==="left").map(r=>(
-            <div key={r.id} style={{ position:"absolute", bottom:"25%", left:`${r.x*0.4}%`, fontSize:32, animation:"floatUp 2.5s forwards", pointerEvents:"none", zIndex:10 }}>{r.emoji}</div>
-          ))}
-        </div>
-
-        {/* ── PLAYER 2 CAM (right) ── */}
-        <div style={{ position:"relative", background:"#060507", overflow:"hidden" }}>
-          <div style={{ position:"absolute", inset:0, display:"flex", alignItems:"center", justifyContent:"center", flexDirection:"column", gap:10 }}>
-            <div style={{ width:72, height:72, borderRadius:"50%", background:"rgba(255,77,109,0.06)", border:"2px solid rgba(255,77,109,0.2)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:32 }}>🧑</div>
-            <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:12, color:"#ff4d6d" }}>{player2?.username||"player 2"}</div>
-          </div>
-
-          {/* Name tag — bottom right overlay */}
-          <div style={{ position:"absolute", bottom:12, right:12, display:"flex", alignItems:"center", gap:7, background:"rgba(0,0,0,0.72)", backdropFilter:"blur(12px)", borderRadius:10, padding:"6px 12px", border:"1px solid rgba(255,77,109,0.2)", flexDirection:"row-reverse" }}>
-            <span style={{ fontSize:14 }}>{player2?.flag||"🌍"}</span>
-            <div style={{ textAlign:"right" }}>
-              <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#ff4d6d", fontWeight:600 }}>{player2?.username||"player 2"}</div>
-              <div style={{ fontSize:10, color:rankColor(player2?.points||0) }}>{getRank(player2?.points||0)} · {(player2?.points||0).toLocaleString()} pts</div>
-            </div>
-          </div>
-
-          {/* Score badge — top right */}
-          <div style={{ position:"absolute", top:12, right:12, fontFamily:"'Bebas Neue',sans-serif", fontSize:40, color:"#ff4d6d", textShadow:"0 0 20px rgba(255,77,109,0.5)", lineHeight:1 }}>{score2}</div>
-
-          {/* Floating reactions */}
-          {reactions.filter(r=>r.side==="right").map(r=>(
-            <div key={r.id} style={{ position:"absolute", bottom:"25%", left:`${r.x*0.4+20}%`, fontSize:32, animation:"floatUp 2.5s forwards", pointerEvents:"none", zIndex:10 }}>{r.emoji}</div>
-          ))}
-        </div>
-
-        {/* ── RIGHT REACTION STRIP — vertical emoji buttons ── */}
-        <div className="spec-right" style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:8, padding:"8px 4px", background:"rgba(14,14,15,0.9)", borderLeft:"1px solid rgba(255,255,255,0.05)" }}>
-          {["😂","🔥","💀","🤣","👏","😮","🎭","⚡"].map(e=>(
-            <button key={e} onClick={()=>addReaction(e)} style={{ width:40, height:40, borderRadius:10, background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.07)", fontSize:18, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", transition:"transform 0.15s, background 0.15s" }}
-              onMouseEnter={ev=>{ev.currentTarget.style.transform="scale(1.2)"; ev.currentTarget.style.background="rgba(255,255,255,0.1)";}}
-              onMouseLeave={ev=>{ev.currentTarget.style.transform="scale(1)"; ev.currentTarget.style.background="rgba(255,255,255,0.04)";}}
-            >{e}</button>
-          ))}
-        </div>
-
-        {/* ── LIVE CHAT — slides up from bottom over both cams ── */}
-        <div style={{ position:"absolute", bottom:0, left:0, width:"40%", maxWidth:280, padding:"8px 12px 16px", pointerEvents:"none", zIndex:20 }}>
-          <div ref={chatRef} style={{ display:"flex", flexDirection:"column", gap:5, maxHeight:220, overflow:"hidden" }}>
-            {chat.slice(-8).map((m,i)=>(
-              <div key={m.id} style={{ display:"flex", alignItems:"flex-start", gap:6, animation:"chatSlide 0.3s both", animationDelay:`${i*0.04}s` }}>
-                <span style={{ fontSize:12, flexShrink:0 }}>{m.flag}</span>
-                <div style={{ background:"rgba(8,8,9,0.7)", backdropFilter:"blur(8px)", borderRadius:8, padding:"4px 9px", maxWidth:"100%" }}>
-                  <span style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:m.color, fontWeight:600 }}>{m.user} </span>
-                  <span style={{ fontSize:12, color:"#ccc" }}>{m.msg}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* ── GAME PROMPT TICKER — center bottom ── */}
-        <div style={{ position:"absolute", bottom:16, left:"50%", transform:"translateX(-50%)", whiteSpace:"nowrap", background:"rgba(0,0,0,0.82)", backdropFilter:"blur(16px)", border:`1px solid ${mode.color}33`, borderRadius:12, padding:"8px 18px", zIndex:25 }}>
-          <span style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:mode.color, letterSpacing:2, marginRight:8 }}>{mode.emoji}</span>
-          <span style={{ fontSize:12, color:"#aaa" }}>{mode.desc}</span>
-        </div>
+function VoteBar({ label, pct, color, isMe }) {
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 5, color: isMe ? color : "#555" }}>
+        <span>{label}</span>
+        <span style={{ fontFamily: "'JetBrains Mono',monospace" }}>{Math.round(pct)}%</span>
+      </div>
+      <div style={{ background: "rgba(255,255,255,0.06)", borderRadius: 4, height: 8, overflow: "hidden" }}>
+        <div style={{
+          height: "100%", borderRadius: 4, width: `${pct}%`,
+          background: `linear-gradient(90deg,${color},${color}88)`,
+          boxShadow: isMe ? `0 0 10px ${color}55` : "none",
+          "--w": `${pct}%`, animation: "voteGrow 1.2s cubic-bezier(0.34,1.56,0.64,1) both",
+        }} />
       </div>
     </div>
   );
 }
 
 /* ─────────────────────────────────────────────
-   PLAYER VIEW — main game component
-   This is for the two people PLAYING
+   MAIN COMPONENT
 ───────────────────────────────────────────── */
 export default function GameScreen({
-  gameMode    = "dontlaugh",
-  roomId,
-  role,
-  opponent    = { username:"stranger", flag:"🌍", points:0 },
-  entryFee    = 3,
-  myPoints    = 0,
-  myUsername  = "you",
-  myFlag      = "🌍",
+  gameMode  = "dontlaugh",
+  opponent  = { name: "stranger_7829", flag: "🇧🇷", avatar: "🧑", pts: 3200 },
+  entryFee  = 10,
+  myPoints  = 74,
   onBack,
-  onMatchEnd,
-  // Set isPlayer=false to render SpectatorView instead
-  isPlayer    = true,
-  // Spectator-only props
-  player1,
-  player2,
 }) {
-  // Route to spectator layout immediately — no camera, no game logic
-  if (!isPlayer) {
-    return <SpectatorView gameMode={gameMode} player1={player1||opponent} player2={player2} onBack={onBack} />;
-  }
-
   const mode = MODES[gameMode] || MODES.dontlaugh;
 
   /* ── STATE ── */
-  const [phase,         setPhase]        = useState("loading");
-  const [loadStatus,    setLoadStatus]   = useState("Asking for camera...");
-  const [timer,         setTimer]        = useState(mode.duration);
-  const [round,         setRound]        = useState(1);
-  const [myRoundScores, setMyRoundScores]= useState([]);
-  const [roundResult,   setRoundResult]  = useState(null);
-  const [matchWon,      setMatchWon]     = useState(null);
-  const [promptIdx,     setPromptIdx]    = useState(0);
-  const [smileDetected, setSmileDetected]= useState(false);
-  const [myVotePct,     setMyVotePct]    = useState(0);
-  const [oppVotePct,    setOppVotePct]   = useState(0);
-  const [voting,        setVoting]       = useState(false);
-  const [mirrorPhase,   setMirrorPhase]  = useState("pose");
-  const [myMirrorScore, setMyMirrorScore]= useState(null);
-  const [reactions,     setReactions]    = useState([]);
-  const [myScore,       setMyScore]      = useState(0);
-  const [oppScore,      setOppScore]     = useState(0);
-  const [oppLeft,       setOppLeft]      = useState(false);
-  const [muted,         setMuted]        = useState(false);
-  const [camOff,        setCamOff]       = useState(false);
+  const [phase,          setPhase]         = useState("loading");
+  const [loadStatus,     setLoadStatus]    = useState("Starting camera...");
+  const [timer,          setTimer]         = useState(mode.duration);
+  const [round,          setRound]         = useState(1);
+  const [myRoundScores,  setMyRoundScores] = useState([]);
+  const [roundResult,    setRoundResult]   = useState(null);
+  const [matchWon,       setMatchWon]      = useState(null);
+  const [promptIdx,      setPromptIdx]     = useState(0);
+  const [smileDetected,  setSmileDetected] = useState(false);
+  const [myVotePct,      setMyVotePct]     = useState(0);
+  const [oppVotePct,     setOppVotePct]    = useState(0);
+  const [voting,         setVoting]        = useState(false);
+  const [mirrorPhase,    setMirrorPhase]   = useState("pose");
+  const [myMirrorScore,  setMyMirrorScore] = useState(null);
+  const [reactions,      setReactions]     = useState([]);
+  const [myScore,        setMyScore]       = useState(0);
+  const [oppScore,       setOppScore]      = useState(0);
 
   /* ── REFS ── */
-  const myVideoRef    = useRef(null);   // your camera — shown BIG
-  const oppVideoRef   = useRef(null);   // opponent camera — shown BIG
-  const hiddenRef     = useRef(null);   // hidden video BlazeFace reads
-  const overlayRef    = useRef(null);   // face landmark canvas
+  const videoRef      = useRef(null);   // hidden video — MediaPipe reads this
+  const videoShowRef  = useRef(null);   // visible self-cam shown to user
+  const overlayRef    = useRef(null);   // canvas for face landmark drawing
   const animRef       = useRef(null);
-  const faceIvRef     = useRef(null);
   const timerIvRef    = useRef(null);
-  const modelRef      = useRef(null);
   const streamRef     = useRef(null);
-  const pcRef         = useRef(null);
   const phaseRef      = useRef("loading");
   const roundRef      = useRef(1);
-  const poseLMRef     = useRef(null);
+  const poseLMRef     = useRef(null);   // stored pose for Mirror Me
 
-  // faceTrack: async interval writes → rAF reads (never mix)
-  const faceTrack = useRef({ cx:0, cy:0, faceW:80, faceH:80, landmarks:null, mouthOpen:0, found:false });
+  /*
+    faceTrack ref: MediaPipe onResults callback writes here.
+    rAF renderLoop reads here synchronously.
+    RULE: never put setState or async calls inside requestAnimationFrame.
+    MediaPipe callback runs async — we bridge via this ref.
+  */
+  const faceTrack = useRef({
+    landmarks: null,   // 468 {x,y,z} normalized points
+    mar: 0,            // mouth aspect ratio
+    cheekRaise: 0,     // for tight smiles
+    found: false,
+  });
+
+  const faceMeshRef = useRef(null);   // MediaPipe FaceMesh instance
+  const mpCameraRef = useRef(null);   // MediaPipe Camera pump
 
   useEffect(() => { phaseRef.current = phase; }, [phase]);
   useEffect(() => { roundRef.current = round; }, [round]);
 
   /* ─────────────────────────────────────────────
-     WEBRTC PEER CONNECTION
-     STUN = free Google servers that tell each browser its public IP
-     Without STUN two browsers behind routers can't find each other
-  ───────────────────────────────────────────── */
-  useEffect(() => {
-    if (!roomId) return;
-
-    const pc = new RTCPeerConnection({
-      iceServers: [
-        { urls:"stun:stun.l.google.com:19302" },
-        { urls:"stun:stun1.l.google.com:19302" },
-      ],
-    });
-    pcRef.current = pc;
-
-    // Remote stream arrived — opponent's camera
-    pc.ontrack = (event) => {
-      if (oppVideoRef.current && event.streams[0]) {
-        oppVideoRef.current.srcObject = event.streams[0];
-      }
-    };
-
-    // ICE candidate discovered — relay to opponent via server
-    pc.onicecandidate = (event) => {
-      if (event.candidate) socket.emit("webrtc:ice", { roomId, candidate:event.candidate });
-    };
-
-    // Receive offer (we are answerer)
-    socket.on("webrtc:offer", async ({ sdp }) => {
-      await pc.setRemoteDescription(new RTCSessionDescription(sdp));
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      socket.emit("webrtc:answer", { roomId, sdp: pc.localDescription });
-    });
-
-    // Receive answer (we are offerer)
-    socket.on("webrtc:answer", async ({ sdp }) => {
-      await pc.setRemoteDescription(new RTCSessionDescription(sdp));
-    });
-
-    // ICE from opponent
-    socket.on("webrtc:ice", async ({ candidate }) => {
-      try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch {}
-    });
-
-    // Opponent quit mid-match
-    socket.on("opponent:left", () => {
-      setOppLeft(true);
-      endMatch(true);
-    });
-
-    return () => {
-      socket.off("webrtc:offer");
-      socket.off("webrtc:answer");
-      socket.off("webrtc:ice");
-      socket.off("opponent:left");
-      pc.close();
-    };
-  }, [roomId]); // eslint-disable-line
-
-  /* ─────────────────────────────────────────────
-     CAMERA + FACE MODEL SETUP
+     MEDIAPIPE SETUP
+     
+     How MediaPipe Face Mesh works:
+     1. We load 3 CDN scripts: face_mesh, camera_utils, drawing_utils
+     2. Create a FaceMesh instance with settings
+     3. Create a Camera instance that pumps video frames to FaceMesh
+     4. FaceMesh calls onResults() with 468 landmarks per frame
+     5. We write landmarks to faceTrack ref — rAF reads it
+     
+     Why MediaPipe over BlazeFace:
+     - 468 landmarks vs 6 → precise lip, eye, cheek geometry
+     - Runs in WASM — much faster than TensorFlow.js on mobile
+     - No model download — served from CDN with cache
+     - Real smile detection from lip geometry, not a rough guess
   ───────────────────────────────────────────── */
   useEffect(() => {
     let mounted = true;
     (async () => {
+      // 1. Get camera
       try {
-        // Request both video AND audio — opponent needs to hear you
         const s = await navigator.mediaDevices.getUserMedia({
           video:{ width:640, height:480, facingMode:"user" },
           audio:true,
         });
         if (!mounted) return;
         streamRef.current = s;
-
-        // Hidden video — BlazeFace reads this for face detection
-        if (hiddenRef.current) {
-          hiddenRef.current.srcObject = s;
-          await hiddenRef.current.play();
-        }
-
-        // Visible self-cam — this is YOUR camera shown big on screen
-        if (myVideoRef.current) {
-          myVideoRef.current.srcObject = s;
-          await myVideoRef.current.play();
-        }
-
-        // Add tracks to WebRTC — this is what the opponent sees/hears
-        if (pcRef.current) {
-          s.getTracks().forEach(track => pcRef.current.addTrack(track, s));
-
-          // Offerer goes first — creates the SDP offer
-          if (role === "offer") {
-            const offer = await pcRef.current.createOffer();
-            await pcRef.current.setLocalDescription(offer);
-            socket.emit("webrtc:offer", { roomId, sdp: pcRef.current.localDescription });
-          }
+        videoRef.current.srcObject = s;
+        await videoRef.current.play();
+        if (videoShowRef.current) {
+          videoShowRef.current.srcObject = s;
+          await videoShowRef.current.play();
         }
       } catch {
-        setLoadStatus("Camera blocked. Allow access and refresh.");
+        setLoadStatus("Camera blocked. Allow access in browser and refresh.");
         return;
       }
 
+      // 2. Load MediaPipe scripts
       setLoadStatus("Loading face tracker...");
-      await loadScript(CDN_TF);
-      await loadScript(CDN_BLAZE);
-      if (!window._faceModel) window._faceModel = await window.blazeface.load();
+      try {
+        await loadScript(CDN_FACEMESH);
+        await loadScript(CDN_CAMERA);
+        await loadScript(CDN_DRAWING);
+      } catch {
+        setLoadStatus("Failed to load face tracker. Check your internet.");
+        return;
+      }
       if (!mounted) return;
-      modelRef.current = window._faceModel;
+
+      // 3. Create FaceMesh
+      const faceMesh = new window.FaceMesh({
+        locateFile: (file) =>
+          `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`,
+      });
+      faceMesh.setOptions({
+        maxNumFaces: 1,
+        refineLandmarks: true,   // includes iris — not needed but gives better lip accuracy
+        minDetectionConfidence: 0.6,
+        minTrackingConfidence:  0.5,
+      });
+
+      // 4. Results callback — runs on every frame MediaPipe processes
+      faceMesh.onResults((results) => {
+        if (!mounted) return;
+        if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+          const lm = results.multiFaceLandmarks[0];
+          const mar        = getMouthAspectRatio(lm);
+          const cheekRaise = getCheekRaise(lm);
+
+          // A smile = open mouth (MAR) OR cheeks raised (tight smile with no teeth)
+          const smiling = mar > SMILE_MAR_THRESHOLD || cheekRaise > 0.72;
+
+          faceTrack.current = { landmarks:lm, mar, cheekRaise, found:true };
+
+          // Only trigger smile in Don't Laugh during playing phase
+          // setSmileDetected is safe here because MediaPipe callback is NOT inside rAF
+          if (phaseRef.current === "playing" && gameMode === "dontlaugh") {
+            setSmileDetected(smiling);
+          }
+        } else {
+          faceTrack.current.found = false;
+        }
+      });
+
+      faceMeshRef.current = faceMesh;
+
+      // 5. Camera utility pumps video frames to FaceMesh
+      // This replaces our old setInterval — MediaPipe controls its own frame rate
+      const camera = new window.Camera(videoRef.current, {
+        onFrame: async () => {
+          if (faceMeshRef.current) {
+            await faceMeshRef.current.send({ image: videoRef.current });
+          }
+        },
+        width: 640, height: 480,
+      });
+      camera.start();
+      mpCameraRef.current = camera;
+
       setLoadStatus("Ready.");
       setPhase("intro");
-      setTimeout(() => { if (mounted) startRound(1); }, INTRO_DURATION);
+      setTimeout(() => { if (mounted) { startRenderLoop(); startRound(1); } }, INTRO_DURATION);
     })();
+
     return () => { mounted = false; cleanup(); };
   }, []); // eslint-disable-line
 
   function cleanup() {
     cancelAnimationFrame(animRef.current);
-    clearInterval(faceIvRef.current);
     clearInterval(timerIvRef.current);
+    if (mpCameraRef.current) mpCameraRef.current.stop();
+    if (faceMeshRef.current) faceMeshRef.current.close();
     if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
   }
 
   /* ─────────────────────────────────────────────
-     FACE DETECTION — async setInterval, writes to ref
-     NEVER inside rAF — this lesson was hard learned
-  ───────────────────────────────────────────── */
-  function startFaceInterval() {
-    clearInterval(faceIvRef.current);
-    faceIvRef.current = setInterval(async () => {
-      if (!modelRef.current || !hiddenRef.current || hiddenRef.current.readyState < 2) return;
-      try {
-        const preds = await modelRef.current.estimateFaces(hiddenRef.current, false);
-        if (preds.length > 0) {
-          const f = preds[0];
-          const [x1,y1] = f.topLeft, [x2,y2] = f.bottomRight;
-          const lm = f.landmarks || [];
-          faceTrack.current = {
-            cx:(x1+x2)/2, cy:(y1+y2)/2, faceW:x2-x1, faceH:y2-y1,
-            landmarks:lm, mouthOpen:getMouthOpenness(lm), found:true,
-          };
-        } else {
-          faceTrack.current.found = false;
-        }
-      } catch {}
-    }, FACE_INTERVAL);
-  }
-
-  /* ─────────────────────────────────────────────
-     OVERLAY rAF — sync, reads faceTrack ref
-     This draws the glowing face ring on YOUR camera
+     OVERLAY rAF — draws face landmarks on canvas
+     
+     Reads faceTrack ref synchronously — NO async, NO await inside here.
+     MediaPipe writes the landmarks; we just visualize them.
+     
+     Canvas coordinate system: MediaPipe gives 0-1 normalized coords.
+     We multiply by canvas W/H to get pixel positions.
+     We also mirror X (multiply by -1 + W) because the video is CSS-mirrored.
   ───────────────────────────────────────────── */
   function startRenderLoop() {
     cancelAnimationFrame(animRef.current);
     const render = () => {
       const canvas = overlayRef.current;
       if (!canvas) { animRef.current = requestAnimationFrame(render); return; }
+
+      // IMPORTANT: always read canvas size from the element, not hardcoded
+      const rect = canvas.getBoundingClientRect();
+      canvas.width  = rect.width  || 640;
+      canvas.height = rect.height || 480;
+
       const ctx = canvas.getContext("2d");
-      const W = canvas.width, H = canvas.height;
-      ctx.clearRect(0, 0, W, H);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       const ft = faceTrack.current;
-      const vw = hiddenRef.current?.videoWidth  || 640;
-      const vh = hiddenRef.current?.videoHeight || 480;
-
-      if (ft.found && ft.faceW > 0) {
-        const mx = W - ft.cx*(W/vw);
-        const my = ft.cy*(H/vh);
-        const fw = ft.faceW*(W/vw);
-        const smiling = ft.mouthOpen > SMILE_THRESHOLD;
-        const col = smiling ? "#ff4d6d" : "#00f5a0";
-
-        ctx.beginPath();
-        ctx.arc(mx, my, fw/2+10, 0, Math.PI*2);
-        ctx.strokeStyle = col; ctx.lineWidth = 2.5;
-        ctx.shadowColor = col; ctx.shadowBlur = 18;
-        ctx.stroke(); ctx.shadowBlur = 0;
-
-        ctx.fillStyle = "#00d4ff";
-        (ft.landmarks||[]).forEach(([lx,ly]) => {
-          ctx.beginPath();
-          ctx.arc(W - lx*(W/vw), ly*(H/vh), 3, 0, Math.PI*2);
-          ctx.fill();
-        });
-
-        if (phaseRef.current === "playing" && gameMode === "dontlaugh") {
-          setSmileDetected(smiling);
-        }
+      if (!ft.found || !ft.landmarks) {
+        animRef.current = requestAnimationFrame(render);
+        return;
       }
+
+      const W = canvas.width, H = canvas.height;
+      const lm = ft.landmarks;
+      const smiling = ft.mar > SMILE_MAR_THRESHOLD || ft.cheekRaise > 0.72;
+      const dotColor = smiling ? "#ff4d6d" : "#00f5a0";
+      const glowCol  = smiling ? "#ff4d6d" : "#00f5a0";
+
+      // Draw key facial landmarks — lips, eyes, nose outline
+      // We only draw ~30 key points to keep it fast and readable
+      const keyIndices = [
+        // Lips
+        61,146,91,181,84,17,314,405,321,375,291,
+        13,312,311,310,415,308,
+        78,95,88,178,87,14,317,402,318,324,308,
+        // Eyes
+        33,7,163,144,145,153,154,155,133,
+        263,249,390,373,374,380,381,382,362,
+        // Nose bridge
+        168,6,197,195,5,
+      ];
+
+      ctx.fillStyle = dotColor;
+      ctx.shadowColor = glowCol;
+      ctx.shadowBlur = 6;
+      keyIndices.forEach(i => {
+        const p = lm[i];
+        if (!p) return;
+        // Mirror X because video is CSS scaleX(-1)
+        const x = W - p.x * W;
+        const y = p.y * H;
+        ctx.beginPath();
+        ctx.arc(x, y, 2.2, 0, Math.PI*2);
+        ctx.fill();
+      });
+      ctx.shadowBlur = 0;
+
+      // Draw mouth outline with thicker line when smiling
+      if (smiling) {
+        const mouthIdx = [61,146,91,181,84,17,314,405,321,375,291,308];
+        ctx.beginPath();
+        mouthIdx.forEach((i, idx) => {
+          const p = lm[i];
+          if (!p) return;
+          const x = W - p.x * W, y = p.y * H;
+          if (idx === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        });
+        ctx.closePath();
+        ctx.strokeStyle = "#ff4d6d";
+        ctx.lineWidth = 2;
+        ctx.shadowColor = "#ff4d6d";
+        ctx.shadowBlur = 12;
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+      }
+
       animRef.current = requestAnimationFrame(render);
     };
     animRef.current = requestAnimationFrame(render);
@@ -732,9 +566,11 @@ export default function GameScreen({
     poseLMRef.current = null;
     setPhase("playing");
 
-    socket.emit("round:start", { roomId, round:n, mode:gameMode });
-    startFaceInterval();
+    // MediaPipe runs continuously via its own camera loop — no startFaceInterval needed
+    // We still start the render loop so face landmarks draw on canvas
     startRenderLoop();
+
+    if (socket && socket.connected) socket.emit("round:start", { round: n, mode: gameMode });
 
     clearInterval(timerIvRef.current);
     let t = mode.duration;
@@ -744,38 +580,42 @@ export default function GameScreen({
     }, 1000);
   }
 
-  function handleRoundEnd(reason, winner=null) {
+  function handleRoundEnd(reason, winner = null) {
     clearInterval(timerIvRef.current);
-    clearInterval(faceIvRef.current);
     cancelAnimationFrame(animRef.current);
     setSmileDetected(false);
 
     let iWon;
-    if      (reason==="smiled")                             iWon = false;
-    else if (reason==="timeout" && gameMode==="dontlaugh")  iWon = true;
-    else iWon = winner!==null ? winner : Math.random()>0.5;
+    if      (reason === "smiled")                            iWon = false;
+    else if (reason === "timeout" && gameMode==="dontlaugh") iWon = true;
+    else iWon = winner !== null ? winner : Math.random() > 0.5;
 
     const result = iWon ? "win" : "loss";
     setRoundResult(result);
-    if (iWon) setMyScore(s=>s+1); else setOppScore(s=>s+1);
+    if (iWon) setMyScore(s => s+1);
+    else       setOppScore(s => s+1);
     setPhase("roundResult");
 
     setMyRoundScores(prev => {
       const next = [...prev, result];
-      socket.emit("round:end", { roomId, round:roundRef.current, result });
-      const wins = next.filter(r=>r==="win").length;
+      socketEmit("round:end", { round: roundRef.current, result });
+
+      const wins   = next.filter(r=>r==="win").length;
       const losses = next.filter(r=>r==="loss").length;
-      const done = wins>=2 || losses>=2 || next.length>=TOTAL_ROUNDS;
+      const done   = wins >= 2 || losses >= 2 || next.length >= TOTAL_ROUNDS;
+
       setTimeout(() => {
-        if (done) endMatch(wins>=losses);
-        else startRound(roundRef.current+1);
+        if (done) endMatch(wins >= losses);
+        else startRound(roundRef.current + 1);
       }, RESULT_DURATION);
+
       return next;
     });
   }
 
+  // smile triggers round end
   useEffect(() => {
-    if (smileDetected && phaseRef.current==="playing" && gameMode==="dontlaugh") {
+    if (smileDetected && phaseRef.current === "playing" && gameMode === "dontlaugh") {
       handleRoundEnd("smiled");
     }
   }, [smileDetected]); // eslint-disable-line
@@ -783,307 +623,299 @@ export default function GameScreen({
   function endMatch(won) {
     setMatchWon(won);
     setPhase("matchResult");
-    socket.emit("match:end", { roomId, won, entryFee, gameMode });
-    if (onMatchEnd) onMatchEnd(won, entryFee);
+    socketEmit("match:end", { won, entryFee, mode: gameMode });
   }
 
+  /* ── Vibe Check / Hot Take — crowd vote ── */
   function triggerVote() {
     clearInterval(timerIvRef.current);
     setVoting(true);
     let elapsed = 0;
     const iv = setInterval(() => {
       elapsed++;
-      const me = 35+Math.random()*30;
+      const me = 35 + Math.random() * 30;
       setMyVotePct(me); setOppVotePct(100-me);
-      if (elapsed>=VOTE_DURATION) {
+      if (elapsed >= VOTE_DURATION) {
         clearInterval(iv);
-        const final = 35+Math.random()*35;
+        const final = 35 + Math.random() * 35;
         setMyVotePct(final); setOppVotePct(100-final);
-        handleRoundEnd("vote", final>=50);
+        handleRoundEnd("vote", final >= 50);
       }
     }, 1000);
   }
 
+  /* ── Mirror Me ── */
   function captureMyPose() {
+    // Store current 468 MediaPipe landmarks as the reference pose
     poseLMRef.current = faceTrack.current.landmarks;
     setMirrorPhase("copy");
     let t = 5; setTimer(5);
     const iv = setInterval(() => {
       t--; setTimer(t);
-      if (t<=0) {
+      if (t <= 0) {
         clearInterval(iv);
         const sc = mirrorScore(poseLMRef.current, faceTrack.current.landmarks);
         setMyMirrorScore(sc);
-        handleRoundEnd("mirror", sc>=50);
+        handleRoundEnd("mirror", sc >= 50);
       }
     }, 1000);
   }
 
+  /* ── Reactions ── */
   function addReaction(emoji) {
     const id = Date.now();
-    setReactions(r=>[...r,{id,emoji,x:Math.random()*70+10}]);
-    setTimeout(()=>setReactions(r=>r.filter(rx=>rx.id!==id)),2500);
-    socket.emit("reaction", { roomId, emoji });
+    setReactions(r => [...r, { id, emoji, x: Math.random()*65+10 }]);
+    setTimeout(() => setReactions(r => r.filter(rx=>rx.id!==id)), 2200);
+    socketEmit("reaction", { emoji });
   }
 
-  function toggleMute() {
-    if (!streamRef.current) return;
-    streamRef.current.getAudioTracks().forEach(t => t.enabled = muted);
-    setMuted(m=>!m);
-  }
-
-  function toggleCam() {
-    if (!streamRef.current) return;
-    streamRef.current.getVideoTracks().forEach(t => t.enabled = camOff);
-    setCamOff(c=>!c);
-  }
-
+  /* ── Play again ── */
   function playAgain() {
     setMyRoundScores([]); setMyScore(0); setOppScore(0);
     setMatchWon(null); setRoundResult(null);
     setPhase("intro");
-    setTimeout(()=>startRound(1), INTRO_DURATION);
+    setTimeout(() => startRound(1), INTRO_DURATION);
   }
 
   const prompts = mode.prompts || mode.poses || [];
   const currentPrompt = prompts[promptIdx] || prompts[0] || "";
-  const danger = timer <= 5;
 
   /* ─────────────────────────────────────────────
-     PLAYER RENDER
-     Layout: two big cams side by side (desktop) or stacked (mobile)
-     No tiny pip — both cams are full and equal
+     RENDER
   ───────────────────────────────────────────── */
   return (
-    <div style={{ height:"100vh", background:BG, color:"#f0eeea", fontFamily:"'Syne',sans-serif", display:"flex", flexDirection:"column", overflow:"hidden" }}>
+    <div style={{ minHeight:"100vh", background:BG, backgroundAttachment:"fixed", color:"#f0eeea", fontFamily:"'Syne',sans-serif", display:"flex", flexDirection:"column" }}>
       <style>{CSS}</style>
 
-      {/* Hidden video — face detection only */}
-      <video ref={hiddenRef} style={{ position:"fixed", opacity:0, pointerEvents:"none", width:1, height:1 }} muted playsInline />
+      {/* hidden video for face detection processing */}
+      <video ref={videoRef} style={{ position:"fixed", opacity:0, pointerEvents:"none", width:1, height:1 }} muted playsInline />
 
       {/* ══════ NAV ══════ */}
-      <nav style={{ flexShrink:0, height:58, display:"flex", alignItems:"center", justifyContent:"space-between", padding:"0 clamp(10px,3vw,24px)", background:"rgba(14,14,15,0.95)", backdropFilter:"blur(24px)", borderBottom:"1px solid rgba(255,255,255,0.06)", zIndex:100 }}>
-        {/* Left: logo + game label */}
+      <nav style={{ flexShrink:0, display:"flex", alignItems:"center", justifyContent:"space-between", height:58, padding:"0 clamp(12px,4vw,36px)", background:"rgba(14,14,15,0.92)", backdropFilter:"blur(24px)", borderBottom:"1px solid rgba(255,255,255,0.06)", zIndex:100 }}>
         <div style={{ display:"flex", alignItems:"center", gap:9 }}>
           <div style={{ width:26, height:26, borderRadius:7, background:"linear-gradient(135deg,#00f5a0,#00d4ff)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, animation:"glowP 3s infinite" }}>▶</div>
           <span style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:20, letterSpacing:3, background:"linear-gradient(90deg,#00f5a0,#00d4ff)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent" }}>StrangerPlay</span>
-          <span style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:"#333", marginLeft:4 }}>// {mode.label}</span>
+          <span style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:"#333", marginLeft:6 }}>// {mode.label}</span>
         </div>
-
-        {/* Center: score + timer — the sports scoreboard */}
-        <div style={{ display:"flex", alignItems:"center", gap:14, position:"absolute", left:"50%", transform:"translateX(-50%)" }}>
-          <div style={{ textAlign:"right" }}>
-            <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:"#00f5a0" }}>{myUsername}</div>
-            <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:26, color:"#00f5a0", lineHeight:1 }}>{myScore}</div>
-          </div>
-          <TimerRing seconds={timer} total={mode.duration} color={mode.color} />
-          <div style={{ textAlign:"left" }}>
-            <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:"#ff4d6d" }}>{opponent.username}</div>
-            <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:26, color:"#ff4d6d", lineHeight:1 }}>{oppScore}</div>
-          </div>
-        </div>
-
-        {/* Right: round dots + pts + back */}
         <div style={{ display:"flex", alignItems:"center", gap:10 }}>
           <RoundDots total={TOTAL_ROUNDS} scores={myRoundScores} />
-          <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#ffd60a", background:"rgba(255,214,10,0.07)", border:"1px solid rgba(255,214,10,0.14)", borderRadius:20, padding:"3px 10px" }}>{myPoints}pts</div>
-          {onBack && <button onClick={()=>{cleanup();onBack();}} style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:8, padding:"6px 14px", color:"#555", fontSize:12, cursor:"pointer" }}>← exit</button>}
+          <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#ffd60a", background:"rgba(255,214,10,0.07)", border:"1px solid rgba(255,214,10,0.14)", borderRadius:20, padding:"3px 12px" }}>{myPoints} pts</div>
+          {onBack && <button onClick={()=>{ cleanup(); onBack(); }} style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:8, padding:"6px 16px", color:"#555", fontSize:13, cursor:"pointer" }}>← back</button>}
         </div>
       </nav>
 
-      {/* ══════ DUAL CAM GRID ══════
-          Both cameras are equal size — no tiny PIP
-          Desktop: side by side
-          Mobile:  stacked vertically (opponent top, you bottom)
-      */}
-      <div className="player-grid" style={{ flex:1, position:"relative" }}>
+      {/* ══════ BODY ══════ */}
+      <div style={{ flex:1, display:"grid", gridTemplateColumns:"1fr clamp(170px,22%,230px)", gap:12, padding:"clamp(8px,2vw,16px)", minHeight:0 }}>
 
-        {/* ── OPPONENT CAM (left on desktop, top on mobile) ── */}
-        <div style={{ position:"relative", background:"#050506", overflow:"hidden", borderRight:"1px solid rgba(255,255,255,0.04)" }}>
-          {/* Opponent video stream — fills entire half */}
-          <video ref={oppVideoRef} autoPlay playsInline
-            style={{ position:"absolute", inset:0, width:"100%", height:"100%", objectFit:"cover" }}
-          />
+        {/* ── LEFT ── */}
+        <div style={{ display:"flex", flexDirection:"column", gap:10, minHeight:0 }}>
 
-          {/* Connecting placeholder — hidden once stream arrives */}
-          <div style={{ position:"absolute", inset:0, display:"flex", alignItems:"center", justifyContent:"center", flexDirection:"column", gap:12, pointerEvents:"none", zIndex:2 }}>
-            {oppLeft ? (
-              <>
-                <div style={{ fontSize:44 }}>👋</div>
-                <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:13, color:"#ff4d6d" }}>{opponent.username} left</div>
-                <div style={{ fontSize:11, color:"#444" }}>you win by default</div>
-              </>
-            ) : (
-              <>
-                <div style={{ width:60, height:60, borderRadius:"50%", background:"rgba(255,77,109,0.06)", border:"2px solid rgba(255,77,109,0.18)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:28 }}>🧑</div>
-                <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:12, color:"#ff4d6d" }}>{opponent.username} {opponent.flag}</div>
-                <div style={{ fontSize:10, color:"#333" }}>connecting...</div>
-              </>
+          {/* score header */}
+          {phase !== "loading" && (
+            <div style={{ display:"grid", gridTemplateColumns:"1fr auto 1fr", alignItems:"center", gap:8, animation:"fadeUp 0.4s both" }}>
+              <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                <div style={{ width:32, height:32, borderRadius:"50%", background:"rgba(0,245,160,0.1)", border:"2px solid rgba(0,245,160,0.25)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:16 }}>⭐</div>
+                <div>
+                  <div style={{ fontSize:12, fontWeight:600, color:"#00f5a0" }}>raj_np 🇳🇵</div>
+                  <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:22, lineHeight:1, color:"#00f5a0" }}>{myScore}</div>
+                </div>
+              </div>
+              <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:4 }}>
+                {phase==="playing" && !voting
+                  ? <TimerRing seconds={timer} total={mode.duration} color={mode.color} />
+                  : <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color: voting?mode.color:"#444", letterSpacing:2, animation: voting?"pulse 1s infinite":"none" }}>
+                      {voting ? "VOTING..." : `Round ${round}/${TOTAL_ROUNDS}`}
+                    </div>
+                }
+              </div>
+              <div style={{ display:"flex", alignItems:"center", gap:8, justifyContent:"flex-end" }}>
+                <div style={{ textAlign:"right" }}>
+                  <div style={{ fontSize:12, fontWeight:600, color:"#ff4d6d" }}>{opponent.name} {opponent.flag}</div>
+                  <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:22, lineHeight:1, color:"#ff4d6d" }}>{oppScore}</div>
+                </div>
+                <div style={{ width:32, height:32, borderRadius:"50%", background:"rgba(255,77,109,0.1)", border:"2px solid rgba(255,77,109,0.25)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:16 }}>{opponent.avatar}</div>
+              </div>
+            </div>
+          )}
+
+          {/* camera box */}
+          <div style={{ position:"relative", borderRadius:16, overflow:"hidden", border:`1px solid ${mode.color}33`, background:"#080809", flex:"1 1 auto", minHeight:280 }}>
+
+            {/* visible camera feed */}
+            {phase !== "loading" && (
+              <video ref={videoShowRef} autoPlay muted playsInline
+                style={{ width:"100%", height:"100%", objectFit:"cover", transform:"scaleX(-1)", display:"block", position:"absolute", inset:0 }}
+              />
+            )}
+
+            {/* face landmark overlay */}
+            <canvas ref={overlayRef} width={640} height={480}
+              style={{ position:"absolute", inset:0, width:"100%", height:"100%", pointerEvents:"none", zIndex:2 }}
+            />
+
+            {/* smile border flash */}
+            {smileDetected && (
+              <div style={{ position:"absolute", inset:0, borderRadius:16, border:"3px solid #ff4d6d", boxShadow:"inset 0 0 40px rgba(255,77,109,0.3)", animation:"smileWarn 0.3s infinite", pointerEvents:"none", zIndex:5 }} />
+            )}
+
+            {/* ── LOADING ── */}
+            {phase==="loading" && (
+              <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:16, background:"rgba(8,8,9,0.96)", zIndex:10 }}>
+                <div style={{ width:50, height:50, borderRadius:"50%", border:"2px solid transparent", borderTopColor:"#00f5a0", borderRightColor:"#00d4ff", animation:"spinRing 1s linear infinite" }} />
+                <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:20, letterSpacing:3, color:"#00f5a0" }}>SETTING UP</div>
+                <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#444", textAlign:"center", maxWidth:240 }}>{loadStatus}</div>
+              </div>
+            )}
+
+            {/* ── INTRO ── */}
+            {phase==="intro" && (
+              <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:14, background:"rgba(8,8,9,0.78)", zIndex:10, animation:"fadeIn 0.3s both" }}>
+                <div style={{ fontSize:52 }}>{mode.emoji}</div>
+                <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"clamp(28px,6vw,48px)", letterSpacing:3, color:mode.color, textShadow:`0 0 30px ${mode.color}` }}>{mode.label.toUpperCase()}</div>
+                <div style={{ fontSize:13, color:"#555", textAlign:"center", maxWidth:260, lineHeight:1.6 }}>{mode.desc}</div>
+                <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#333", letterSpacing:2, animation:"pulse 1.5s infinite" }}>starting round 1...</div>
+              </div>
+            )}
+
+            {/* ── PLAYING overlay ── */}
+            {phase==="playing" && (
+              <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column", justifyContent:"flex-end", padding:14, gap:10, zIndex:4 }}>
+
+                {/* You smiled warning */}
+                {gameMode==="dontlaugh" && smileDetected && (
+                  <div style={{ position:"absolute", top:"42%", left:"50%", transform:"translate(-50%,-50%)", fontFamily:"'Bebas Neue',sans-serif", fontSize:"clamp(36px,8vw,56px)", color:"#ff4d6d", textShadow:"0 0 30px rgba(255,77,109,0.9)", animation:"smileWarn 0.3s infinite", whiteSpace:"nowrap", zIndex:8 }}>
+                    YOU SMILED! 😂
+                  </div>
+                )}
+
+                {/* prompt bar at bottom */}
+                {(gameMode==="dontlaugh"||gameMode==="vibecheck"||gameMode==="hottake") && (
+                  <div style={{ background:"rgba(0,0,0,0.75)", backdropFilter:"blur(14px)", borderRadius:12, padding:"12px 16px", border:`1px solid ${mode.color}33` }}>
+                    <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:mode.color, letterSpacing:2, marginBottom:5 }}>
+                      {gameMode==="dontlaugh"?"IMAGINE THIS:":gameMode==="hottake"?"HOT TAKE:":"YOUR VIBE:"}
+                    </div>
+                    <div style={{ fontSize:"clamp(13px,2vw,16px)", fontWeight:600, color:"#f0eeea", lineHeight:1.4 }}>{currentPrompt}</div>
+                  </div>
+                )}
+
+                {/* Mirror Me controls */}
+                {gameMode==="mirrorme" && (
+                  <div style={{ background:"rgba(0,0,0,0.75)", backdropFilter:"blur(14px)", borderRadius:12, padding:"12px 16px", border:`1px solid ${mode.color}33` }}>
+                    <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:mode.color, letterSpacing:2, marginBottom:5 }}>
+                      {mirrorPhase==="pose"?"MAKE THIS FACE:":"NOW COPY IT EXACTLY:"}
+                    </div>
+                    <div style={{ fontSize:14, fontWeight:600, color:"#f0eeea", lineHeight:1.4, marginBottom:mirrorPhase==="pose"?10:0 }}>{currentPrompt}</div>
+                    {mirrorPhase==="pose" && (
+                      <button onClick={captureMyPose} style={{ background:`linear-gradient(135deg,${mode.color},#00d4ff)`, color:"#0a0a0a", border:"none", borderRadius:8, padding:"8px 20px", fontFamily:"'Bebas Neue',sans-serif", fontSize:16, letterSpacing:2, cursor:"pointer" }}>
+                        CAPTURE POSE
+                      </button>
+                    )}
+                    {myMirrorScore!==null && (
+                      <div style={{ marginTop:6, fontFamily:"'Bebas Neue',sans-serif", fontSize:22, color:mode.color }}>Accuracy: {myMirrorScore}/100</div>
+                    )}
+                  </div>
+                )}
+
+                {/* vote trigger */}
+                {(gameMode==="vibecheck"||gameMode==="hottake") && !voting && timer<=mode.duration-5 && (
+                  <button onClick={triggerVote} style={{ background:`linear-gradient(135deg,${mode.color},#a064ff)`, color:"#0a0a0a", border:"none", borderRadius:10, padding:"11px 0", fontFamily:"'Bebas Neue',sans-serif", fontSize:18, letterSpacing:2, cursor:"pointer" }}>
+                    START CROWD VOTE
+                  </button>
+                )}
+
+                {/* vote bars */}
+                {voting && (
+                  <div style={{ background:"rgba(0,0,0,0.8)", backdropFilter:"blur(14px)", borderRadius:12, padding:14, border:`1px solid ${mode.color}33` }}>
+                    <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:"#444", letterSpacing:2, marginBottom:10 }}>CROWD VOTE</div>
+                    <VoteBar label="you 🇳🇵"    pct={myVotePct}  color="#00f5a0" isMe />
+                    <VoteBar label={`${opponent.name} ${opponent.flag}`} pct={oppVotePct} color="#ff4d6d" />
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ── ROUND RESULT ── */}
+            {phase==="roundResult" && (
+              <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:12, background:"rgba(8,8,9,0.88)", zIndex:10, animation:"fadeIn 0.3s both" }}>
+                <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"clamp(48px,10vw,80px)", letterSpacing:4, lineHeight:1, color:roundResult==="win"?"#00f5a0":"#ff4d6d", textShadow:`0 0 40px ${roundResult==="win"?"rgba(0,245,160,0.7)":"rgba(255,77,109,0.7)"}`, animation:"winPop 0.5s both" }}>
+                  {roundResult==="win"?"YOU WIN!":"YOU LOSE"}
+                </div>
+                <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:12, color:"#444" }}>
+                  {round < TOTAL_ROUNDS ? `round ${round+1} starting...` : "wrapping up..."}
+                </div>
+              </div>
             )}
           </div>
+        </div>
 
-          {/* Opponent name tag — bottom left */}
-          <div style={{ position:"absolute", bottom:80, left:12, display:"flex", alignItems:"center", gap:8, background:"rgba(0,0,0,0.72)", backdropFilter:"blur(12px)", borderRadius:10, padding:"7px 12px", border:"1px solid rgba(255,77,109,0.2)", zIndex:5 }}>
-            <span style={{ fontSize:16 }}>{opponent.flag}</span>
-            <div>
-              <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:12, color:"#ff4d6d", fontWeight:600 }}>{opponent.username}</div>
-              <div style={{ fontSize:10, color:rankColor(opponent.points) }}>{getRank(opponent.points)} · {(opponent.points||0).toLocaleString()} pts</div>
+        {/* ── RIGHT SIDEBAR ── */}
+        <div style={{ display:"flex", flexDirection:"column", gap:10, overflow:"hidden" }}>
+
+          {/* mode info */}
+          <div style={{ background:"rgba(255,255,255,0.025)", border:"1px solid rgba(255,255,255,0.06)", borderRadius:14, padding:14, animation:"fadeUp 0.4s both" }}>
+            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10 }}>
+              <span style={{ fontSize:24 }}>{mode.emoji}</span>
+              <div>
+                <div style={{ fontSize:13, fontWeight:600, color:mode.color }}>{mode.label}</div>
+                <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:"#444" }}>round {round}/{TOTAL_ROUNDS}</div>
+              </div>
+            </div>
+            <div style={{ fontSize:12, color:"#3a3a3f", lineHeight:1.5, marginBottom:10 }}>{mode.desc}</div>
+            <div style={{ padding:"8px 12px", background:"rgba(255,214,10,0.07)", border:"1px solid rgba(255,214,10,0.14)", borderRadius:10, fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#ffd60a" }}>
+              🏆 {entryFee*2} pts pot
             </div>
           </div>
 
-          {/* Reactions floating on opponent's side */}
-          {reactions.map(r=>(
-            <div key={r.id} style={{ position:"absolute", bottom:"30%", left:`${r.x}%`, fontSize:30, animation:"floatUp 2.5s forwards", pointerEvents:"none", zIndex:10 }}>{r.emoji}</div>
-          ))}
+          {/* round tracker */}
+          <div style={{ background:"rgba(255,255,255,0.025)", border:"1px solid rgba(255,255,255,0.06)", borderRadius:14, padding:14 }}>
+            <div style={{ fontSize:10, color:"#444", letterSpacing:3, textTransform:"uppercase", marginBottom:12 }}>rounds</div>
+            {Array.from({length:TOTAL_ROUNDS}).map((_,i)=>{
+              const s = myRoundScores[i];
+              const active = i+1===round && phase==="playing";
+              return (
+                <div key={i} style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
+                  <div style={{ width:6, height:6, borderRadius:"50%", background:s==="win"?"#00f5a0":s==="loss"?"#ff4d6d":active?"rgba(255,255,255,0.3)":"rgba(255,255,255,0.08)", boxShadow:s?`0 0 6px ${s==="win"?"#00f5a0":"#ff4d6d"}`:active?"0 0 6px rgba(255,255,255,0.3)":"none", transition:"all 0.3s" }} />
+                  <div style={{ fontSize:12, color:s?"#d0cec8":active?"#888":"#333" }}>
+                    Round {i+1} {s?(s==="win"?"· won":"· lost"):active?"· now playing":"· upcoming"}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
 
-          {/* Round result overlay — only on opponent side */}
-          {phase==="roundResult" && (
-            <div style={{ position:"absolute", inset:0, display:"flex", alignItems:"center", justifyContent:"center", background:"rgba(8,8,9,0.82)", zIndex:15, animation:"fadeIn 0.3s both" }}>
-              <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"clamp(44px,10vw,72px)", letterSpacing:3, color:roundResult==="win"?"#00f5a0":"#ff4d6d", textShadow:`0 0 40px ${roundResult==="win"?"rgba(0,245,160,0.7)":"rgba(255,77,109,0.7)"}`, animation:"winPop 0.5s both" }}>
-                {roundResult==="win"?"WIN 🎉":"LOSS 💀"}
+          {/* opponent */}
+          <div style={{ background:"rgba(255,255,255,0.025)", border:"1px solid rgba(255,255,255,0.06)", borderRadius:14, padding:14 }}>
+            <div style={{ fontSize:10, color:"#444", letterSpacing:3, textTransform:"uppercase", marginBottom:10 }}>opponent</div>
+            <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+              <div style={{ width:36, height:36, borderRadius:"50%", background:"rgba(255,77,109,0.1)", border:"1px solid rgba(255,77,109,0.25)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:18 }}>{opponent.avatar}</div>
+              <div>
+                <div style={{ fontSize:13, fontWeight:600 }}>{opponent.name} {opponent.flag}</div>
+                <div style={{ fontSize:11, color:rankColor(opponent.pts) }}>{getRank(opponent.pts)} · {opponent.pts.toLocaleString()} pts</div>
               </div>
-            </div>
-          )}
-        </div>
-
-        {/* ── YOUR CAM (right on desktop, bottom on mobile) ── */}
-        <div style={{ position:"relative", background:"#060507", overflow:"hidden" }}>
-          {/* Your video — fills entire half, mirrored like a selfie cam */}
-          <video ref={myVideoRef} autoPlay muted playsInline
-            style={{ position:"absolute", inset:0, width:"100%", height:"100%", objectFit:"cover", transform:"scaleX(-1)", display:camOff?"none":"block" }}
-          />
-          {camOff && (
-            <div style={{ position:"absolute", inset:0, display:"flex", alignItems:"center", justifyContent:"center", background:"#080809" }}>
-              <div style={{ textAlign:"center" }}>
-                <div style={{ fontSize:44, marginBottom:10 }}>📷</div>
-                <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:12, color:"#333" }}>camera off</div>
-              </div>
-            </div>
-          )}
-
-          {/* Face landmark overlay — drawn on your cam */}
-          <canvas ref={overlayRef} width={640} height={480}
-            style={{ position:"absolute", inset:0, width:"100%", height:"100%", pointerEvents:"none", zIndex:3, transform:"scaleX(-1)" }}
-          />
-
-          {/* Smile detected flash border */}
-          {smileDetected && (
-            <div style={{ position:"absolute", inset:0, border:"4px solid #ff4d6d", boxShadow:"inset 0 0 50px rgba(255,77,109,0.4)", animation:"smileWarn 0.3s infinite", pointerEvents:"none", zIndex:6 }} />
-          )}
-
-          {/* YOU smiled warning text */}
-          {gameMode==="dontlaugh" && smileDetected && (
-            <div style={{ position:"absolute", top:"38%", left:"50%", transform:"translate(-50%,-50%)", fontFamily:"'Bebas Neue',sans-serif", fontSize:"clamp(32px,8vw,56px)", color:"#ff4d6d", textShadow:"0 0 30px rgba(255,77,109,0.9)", animation:"smileWarn 0.3s infinite", whiteSpace:"nowrap", zIndex:8, pointerEvents:"none" }}>
-              YOU SMILED 😂
-            </div>
-          )}
-
-          {/* Your name tag — bottom right */}
-          <div style={{ position:"absolute", bottom:80, right:12, display:"flex", alignItems:"center", gap:8, background:"rgba(0,0,0,0.72)", backdropFilter:"blur(12px)", borderRadius:10, padding:"7px 12px", border:"1px solid rgba(0,245,160,0.2)", flexDirection:"row-reverse", zIndex:5 }}>
-            <span style={{ fontSize:16 }}>{myFlag}</span>
-            <div style={{ textAlign:"right" }}>
-              <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:12, color:"#00f5a0", fontWeight:600 }}>{myUsername}</div>
-              <div style={{ fontSize:10, color:rankColor(myPoints) }}>{getRank(myPoints)} · {myPoints.toLocaleString()} pts</div>
             </div>
           </div>
 
-          {/* ── GAME PROMPT — overlaid on your cam, bottom center ── */}
-          {phase==="playing" && (
-            <div style={{ position:"absolute", bottom:80, left:"50%", transform:"translateX(-50%)", width:"calc(100% - 24px)", zIndex:7 }}>
-
-              {/* Don't Laugh / Vibe Check / Hot Take prompt */}
-              {(gameMode==="dontlaugh"||gameMode==="vibecheck"||gameMode==="hottake") && !voting && (
-                <div style={{ background:"rgba(0,0,0,0.82)", backdropFilter:"blur(16px)", borderRadius:14, padding:"12px 16px", border:`1px solid ${mode.color}33` }}>
-                  <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:9, color:mode.color, letterSpacing:2, marginBottom:5 }}>
-                    {gameMode==="dontlaugh"?"IMAGINE THIS:":gameMode==="hottake"?"HOT TAKE:":"YOUR VIBE:"}
-                  </div>
-                  <div style={{ fontSize:"clamp(12px,2.5vw,15px)", fontWeight:600, color:"#f0eeea", lineHeight:1.5 }}>{currentPrompt}</div>
-                </div>
-              )}
-
-              {/* Mirror Me controls */}
-              {gameMode==="mirrorme" && (
-                <div style={{ background:"rgba(0,0,0,0.82)", backdropFilter:"blur(16px)", borderRadius:14, padding:"12px 16px", border:`1px solid ${mode.color}33` }}>
-                  <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:9, color:mode.color, letterSpacing:2, marginBottom:5 }}>
-                    {mirrorPhase==="pose"?"MAKE THIS FACE:":"NOW COPY IT:"}
-                  </div>
-                  <div style={{ fontSize:14, fontWeight:600, color:"#f0eeea", marginBottom:mirrorPhase==="pose"?10:0 }}>{currentPrompt}</div>
-                  {mirrorPhase==="pose" && (
-                    <button onClick={captureMyPose} style={{ background:`linear-gradient(135deg,${mode.color},#00d4ff)`, color:"#0a0a0a", border:"none", borderRadius:8, padding:"8px 20px", fontFamily:"'Bebas Neue',sans-serif", fontSize:15, letterSpacing:2, cursor:"pointer" }}>
-                      CAPTURE POSE
-                    </button>
-                  )}
-                  {myMirrorScore!==null && (
-                    <div style={{ marginTop:6, fontFamily:"'Bebas Neue',sans-serif", fontSize:22, color:mode.color }}>Accuracy: {myMirrorScore}/100</div>
-                  )}
-                </div>
-              )}
-
-              {/* Crowd vote trigger */}
-              {(gameMode==="vibecheck"||gameMode==="hottake") && !voting && timer<=mode.duration-5 && (
-                <button onClick={triggerVote} style={{ marginTop:8, width:"100%", background:`linear-gradient(135deg,${mode.color},#a064ff)`, color:"#0a0a0a", border:"none", borderRadius:12, padding:"12px 0", fontFamily:"'Bebas Neue',sans-serif", fontSize:17, letterSpacing:2, cursor:"pointer" }}>
-                  START CROWD VOTE
-                </button>
-              )}
-
-              {/* Vote bars */}
-              {voting && (
-                <div style={{ background:"rgba(0,0,0,0.85)", backdropFilter:"blur(16px)", borderRadius:14, padding:14, border:`1px solid ${mode.color}33` }}>
-                  <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:9, color:"#444", letterSpacing:2, marginBottom:10 }}>CROWD VOTE</div>
-                  <VoteBar label={`${myUsername} ${myFlag}`}       pct={myVotePct}  color="#00f5a0" isMe />
-                  <VoteBar label={`${opponent.username} ${opponent.flag}`} pct={oppVotePct} color="#ff4d6d" />
-                </div>
-              )}
+          {/* crowd */}
+          <div style={{ background:"rgba(255,255,255,0.025)", border:"1px solid rgba(255,255,255,0.06)", borderRadius:14, padding:14, flex:1, position:"relative", overflow:"hidden" }}>
+            <div style={{ fontSize:10, color:"#444", letterSpacing:3, textTransform:"uppercase", marginBottom:10 }}>👀 crowd (84)</div>
+            {[["🧑","alex_k"],["👩","priya_s"],["🐉","dragonz"]].map(([av,n])=>(
+              <div key={n} style={{ display:"flex", alignItems:"center", gap:7, marginBottom:7 }}>
+                <div style={{ width:22, height:22, borderRadius:"50%", background:"rgba(255,255,255,0.05)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:11 }}>{av}</div>
+                <span style={{ fontSize:11, color:"#555" }}>{n}</span>
+              </div>
+            ))}
+            <div style={{ fontSize:10, color:"#2a2a2f", marginBottom:10 }}>+81 more watching</div>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:5 }}>
+              {["😂","🔥","💀","🤣","👏","😮"].map(e=>(
+                <button key={e} onClick={()=>addReaction(e)} style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.06)", borderRadius:7, padding:"7px 0", fontSize:15, cursor:"pointer", transition:"transform 0.15s" }}
+                  onMouseEnter={ev=>ev.currentTarget.style.transform="scale(1.2)"}
+                  onMouseLeave={ev=>ev.currentTarget.style.transform="scale(1)"}
+                >{e}</button>
+              ))}
             </div>
-          )}
-
-          {/* ── INTRO OVERLAY on your cam ── */}
-          {phase==="intro" && (
-            <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:14, background:"rgba(8,8,9,0.78)", zIndex:10, animation:"fadeIn 0.3s both" }}>
-              <div style={{ fontSize:52 }}>{mode.emoji}</div>
-              <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"clamp(28px,6vw,44px)", letterSpacing:3, color:mode.color, textShadow:`0 0 30px ${mode.color}` }}>{mode.label.toUpperCase()}</div>
-              <div style={{ fontSize:13, color:"#555", textAlign:"center", maxWidth:260, lineHeight:1.6, padding:"0 20px" }}>{mode.desc}</div>
-              <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#333", letterSpacing:2, animation:"pulse 1.5s infinite" }}>starting round 1...</div>
-            </div>
-          )}
-
-          {/* ── LOADING OVERLAY ── */}
-          {phase==="loading" && (
-            <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:16, background:"rgba(8,8,9,0.96)", zIndex:10 }}>
-              <div style={{ width:50, height:50, borderRadius:"50%", border:"2px solid transparent", borderTopColor:"#00f5a0", borderRightColor:"#00d4ff", animation:"spinRing 1s linear infinite" }} />
-              <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:20, letterSpacing:3, color:"#00f5a0" }}>SETTING UP</div>
-              <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#444", textAlign:"center", maxWidth:240, padding:"0 20px" }}>{loadStatus}</div>
-            </div>
-          )}
-        </div>
-
-        {/* ── BOTTOM CONTROL BAR — fixed over both cams ── */}
-        <div style={{ position:"absolute", bottom:0, left:0, right:0, height:68, display:"flex", alignItems:"center", justifyContent:"center", gap:14, background:"linear-gradient(to top, rgba(8,8,9,0.95), transparent)", zIndex:20, padding:"0 20px" }}>
-
-          {/* Mute */}
-          <button onClick={toggleMute} style={{ width:48, height:48, borderRadius:"50%", background:muted?"rgba(255,77,109,0.2)":"rgba(255,255,255,0.08)", border:`1.5px solid ${muted?"rgba(255,77,109,0.5)":"rgba(255,255,255,0.12)"}`, color:"#f0eeea", fontSize:20, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", transition:"all 0.2s" }}>
-            {muted?"🔇":"🎤"}
-          </button>
-
-          {/* Cam toggle */}
-          <button onClick={toggleCam} style={{ width:48, height:48, borderRadius:"50%", background:camOff?"rgba(255,77,109,0.2)":"rgba(255,255,255,0.08)", border:`1.5px solid ${camOff?"rgba(255,77,109,0.5)":"rgba(255,255,255,0.12)"}`, color:"#f0eeea", fontSize:20, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", transition:"all 0.2s" }}>
-            {camOff?"🚫":"📷"}
-          </button>
-
-          {/* Reaction buttons */}
-          {["😂","🔥","😮"].map(e=>(
-            <button key={e} onClick={()=>addReaction(e)} style={{ width:44, height:44, borderRadius:"50%", background:"rgba(255,255,255,0.06)", border:"1.5px solid rgba(255,255,255,0.1)", fontSize:18, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", transition:"transform 0.15s" }}
-              onMouseEnter={ev=>ev.currentTarget.style.transform="scale(1.2)"}
-              onMouseLeave={ev=>ev.currentTarget.style.transform="scale(1)"}
-            >{e}</button>
-          ))}
-
-          {/* Hang up — big red, center */}
-          <button onClick={()=>{cleanup();if(roomId)socket.emit("match:leave",{roomId});if(onBack)onBack();}} style={{ width:58, height:58, borderRadius:"50%", background:"#ff4d6d", border:"none", fontSize:22, cursor:"pointer", boxShadow:"0 0 28px rgba(255,77,109,0.5)", display:"flex", alignItems:"center", justifyContent:"center" }}>📵</button>
-
-          {/* Entry fee pot */}
-          <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#ffd60a", background:"rgba(255,214,10,0.07)", border:"1px solid rgba(255,214,10,0.18)", borderRadius:20, padding:"5px 12px" }}>
-            🏆 {entryFee*2} pts
+            {reactions.map(r=>(
+              <div key={r.id} style={{ position:"absolute", bottom:"18%", left:`${r.x}%`, fontSize:26, animation:"floatUp 2.2s forwards", pointerEvents:"none" }}>{r.emoji}</div>
+            ))}
           </div>
         </div>
       </div>
@@ -1094,6 +926,7 @@ export default function GameScreen({
           <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"clamp(56px,12vw,96px)", letterSpacing:4, lineHeight:1, color:matchWon?"#00f5a0":"#ff4d6d", textShadow:`0 0 60px ${matchWon?"rgba(0,245,160,0.7)":"rgba(255,77,109,0.7)"}`, animation:"winPop 0.6s both" }}>
             {matchWon?"YOU WIN 🎉":"YOU LOSE 💀"}
           </div>
+
           <div style={{ display:"flex", gap:12, flexWrap:"wrap", justifyContent:"center" }}>
             {[["rounds won",myScore,"#00f5a0"],["rounds lost",oppScore,"#ff4d6d"],["pts pot",entryFee*2,"#ffd60a"]].map(([l,v,c])=>(
               <div key={l} style={{ textAlign:"center", background:"rgba(255,255,255,0.025)", border:"1px solid rgba(255,255,255,0.06)", borderRadius:14, padding:"14px 20px" }}>
@@ -1102,12 +935,14 @@ export default function GameScreen({
               </div>
             ))}
           </div>
+
           <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:14, color:matchWon?"#ffd60a":"#ff4d6d", background:matchWon?"rgba(255,214,10,0.08)":"rgba(255,77,109,0.08)", border:`1px solid ${matchWon?"rgba(255,214,10,0.2)":"rgba(255,77,109,0.2)"}`, borderRadius:12, padding:"11px 28px" }}>
-            {matchWon?`+${entryFee} pts earned`:`-${entryFee} pts lost`}
+            {matchWon ? `+${entryFee} pts earned` : `-${entryFee} pts lost`}
           </div>
+
           <div style={{ display:"flex", gap:12, flexWrap:"wrap", justifyContent:"center" }}>
             <button onClick={playAgain} style={{ background:"linear-gradient(135deg,#00f5a0,#00d4ff)", color:"#0a0a0a", border:"none", borderRadius:12, padding:"13px 32px", fontFamily:"'Bebas Neue',sans-serif", fontSize:20, letterSpacing:2, cursor:"pointer", boxShadow:"0 0 30px rgba(0,245,160,0.35)" }}>PLAY AGAIN</button>
-            {onBack && <button onClick={()=>{cleanup();onBack();}} style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:12, padding:"13px 24px", color:"#555", fontSize:14, cursor:"pointer" }}>Exit</button>}
+            {onBack && <button onClick={()=>{ cleanup(); onBack(); }} style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:12, padding:"13px 24px", color:"#555", fontSize:14, cursor:"pointer" }}>Exit</button>}
           </div>
         </div>
       )}
