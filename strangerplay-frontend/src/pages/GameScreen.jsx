@@ -890,8 +890,7 @@ export default function GameScreen({
               <div style={{ width:36, height:36, borderRadius:"50%", background:"rgba(255,77,109,0.1)", border:"1px solid rgba(255,77,109,0.25)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:18 }}>{opponent.avatar}</div>
               <div>
                 <div style={{ fontSize:13, fontWeight:600 }}>{opponent.name} {opponent.flag}</div>
-                <div style={{ fontSize:11, color:rankColor(opponent.pts) }}>{getRank(opponent.pts)} · {opponent.pts.toLocaleString()} pts</div>
-              </div>
+<div style={{ fontSize:11, color:rankColor(opponent?.pts || 0) }}>{getRank(opponent?.pts || 0)} · {(opponent?.pts || 0).toLocaleString()} pts</div>              </div>
             </div>
           </div>
 

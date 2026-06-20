@@ -72,6 +72,8 @@ const io = new Server(server, {
       cb(new Error("CORS"));
     },
     methods: ["GET","POST"],
+      pingTimeout: 60000,   // wait 60s before declaring disconnect (default: 20s)
+  pingInterval: 25000, 
   },
 });
 

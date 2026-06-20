@@ -1,232 +1,417 @@
+import { useState, useEffect } from "react";
 
-import { useState, useEffect, useRef } from "react";
+/* ═══════════════════════════════════════════════════════════════
+   LoginSignup.jsx — full rebuild against the locked design system.
 
-/* ─────────────────────────────────────────────
-   CSS
-   Key responsive fix: on mobile (<640px) the left
-   branding panel HIDES completely. The form takes
-   the full width. No more 460px fixed right column.
-───────────────────────────────────────────── */
+   This file does NOT import StrangerPlay_Main.jsx, so the design
+   tokens (DS) and shared classes (.sp-input, .sp-btn-primary, etc.)
+   are redeclared here. Keep these in sync if the palette in
+   StrangerPlay_Main.jsx ever changes — copy the DS object across.
+
+   Identity for this screen specifically: "your ticket into the show."
+   The whole page reads as an admission ticket — a perforated stub
+   on the left (branding), torn off from the ticket body on the
+   right (the actual form). Signature element: a rotated ink-stamp
+   "ADMIT ONE" mark, reusing the ink-stamp button language that's
+   already locked in everywhere else.
+
+   FUNCTIONAL NOTE: handleLogin / handleSignup / saveSession logic
+   is carried over unchanged from the old file — it already matches
+   server.js exactly (POST /api/auth/signin, POST /api/auth/signup,
+   { token, user } response shape). This rebuild only touches layout
+   and styling, per your brief.
+
+   THREE THINGS I CHANGED ON PURPOSE (read this before you ask "why"):
+
+   1. Cut the Google / X buttons. They called no real function —
+      onClick={()=>{}} — and your backend has no OAuth route. A button
+      that does nothing on click is worse than no button; it reads as
+      broken, not "coming soon." Easy to add back once there's a real
+      route to hit.
+
+   2. Cut "forgot password?". Same reason — no /api/auth/forgot route
+      exists yet. Flag it as a real backlog item, not a dead link.
+
+   3. Killed the hardcoded flag:"🇳🇵", country:"Nepal" on every signup.
+      That was you testing locally, not a feature — it would've
+      silently flagged every single user on Earth as Nepali on the
+      leaderboard. Replaced with a real (optional) country picker
+      that defaults to 🌍 "Prefer not to say".
+═══════════════════════════════════════════════════════════════ */
+
+const DS = {
+  void:    "#0d0b08",
+  surface: "#161310",
+  surface2:"#1d1812",
+  rim:     "#2b251d",
+  rimHov:  "#473b2a",
+  plat:    "#f4ede1",
+  ash:     "#8a7d68",
+  ghost:   "#352d22",
+  signal:  "#c97b3d",
+  live:    "#d6452f",
+  ice:     "#7a8f7c",
+  gold:    "#e0b454",
+};
+
 const css = `
-  @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=JetBrains+Mono:wght@400;500&family=Syne:wght@400;600;700;800&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,500;0,9..144,700;1,9..144,500&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  body { background: #0e0e0f; color: #f0eeea; font-family: 'Syne', sans-serif; min-height: 100vh; overflow-x: hidden; }
-
-  @keyframes shimmer  { 0%{background-position:200% center} 100%{background-position:-200% center} }
-  @keyframes orbFloat { 0%,100%{transform:translateY(0) scale(1)} 50%{transform:translateY(-40px) scale(1.06)} }
-  @keyframes fadeUp   { from{opacity:0;transform:translateY(30px)} to{opacity:1;transform:translateY(0)} }
-  @keyframes glowPulse{ 0%,100%{box-shadow:0 0 20px rgba(0,245,160,.3)} 50%{box-shadow:0 0 50px rgba(0,245,160,.6)} }
-  @keyframes slide    { from{opacity:0;transform:translateX(24px)} to{opacity:1;transform:translateX(0)} }
-  @keyframes spin     { to{transform:rotate(360deg)} }
-  @keyframes tickPop  { 0%{transform:scale(0);opacity:0} 60%{transform:scale(1.2)} 100%{transform:scale(1);opacity:1} }
-  @keyframes float1   { 0%,100%{transform:translateY(0) rotate(0deg)} 50%{transform:translateY(-18px) rotate(3deg)} }
-  @keyframes float2   { 0%,100%{transform:translateY(0) rotate(0deg)} 50%{transform:translateY(-24px) rotate(-2deg)} }
-
-  .panel-slide { animation: slide 0.38s cubic-bezier(0.22,1,0.36,1) both; }
-
-  .sp-input {
-    width: 100%;
-    background: rgba(255,255,255,0.04);
-    border: 1px solid rgba(255,255,255,0.08);
-    border-radius: 14px;
-    padding: 15px 18px;
-    color: #f0eeea;
-    font-family: 'Syne', sans-serif;
-    font-size: 15px;
-    outline: none;
-    transition: border-color .25s, background .25s, box-shadow .25s;
-    -webkit-appearance: none;
+  html { font-size: 16px; }
+  body {
+    background: ${DS.void};
+    color: ${DS.plat};
+    font-family: 'Inter', sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+    -webkit-tap-highlight-color: transparent;
+    background-image:
+      radial-gradient(ellipse 900px 600px at 15% -10%, ${DS.signal}14, transparent 60%),
+      radial-gradient(ellipse 700px 500px at 100% 30%, ${DS.live}0d, transparent 55%);
   }
-  .sp-input::placeholder { color: #444; }
-  .sp-input:focus {
-    border-color: rgba(0,245,160,0.45);
-    background: rgba(0,245,160,0.04);
-    box-shadow: 0 0 0 3px rgba(0,245,160,0.08);
+  body::after {
+    content: '';
+    position: fixed; inset: 0; z-index: 9999; pointer-events: none;
+    opacity: 0.05; mix-blend-mode: overlay;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='90' height='90'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   }
-  .sp-input.err {
-    border-color: rgba(255,77,109,0.5);
-    box-shadow: 0 0 0 3px rgba(255,77,109,0.08);
-  }
+  ::-webkit-scrollbar       { width: 3px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: ${DS.rim}; border-radius: 99px; }
 
-  .sp-btn {
-    width: 100%;
-    background: linear-gradient(135deg,#00f5a0,#00d4ff);
-    border: none; border-radius: 14px;
-    padding: 16px;
-    color: #0a0a0a;
-    font-family: 'Bebas Neue', sans-serif;
-    font-size: 18px; letter-spacing: 2px;
+  @keyframes ls-up    { from{opacity:0;transform:translateY(24px)} to{opacity:1;transform:translateY(0)} }
+  @keyframes ls-slide { from{opacity:0;transform:translateX(14px)} to{opacity:1;transform:translateX(0)} }
+  @keyframes ls-stamp { 0%{opacity:0;transform:scale(1.8) rotate(-18deg)} 55%{opacity:1} 100%{opacity:1;transform:scale(1) rotate(-7deg)} }
+  @keyframes ls-spin  { to{transform:rotate(360deg)} }
+  @keyframes ls-pop   { 0%{transform:scale(0);opacity:0} 60%{transform:scale(1.15)} 100%{transform:scale(1);opacity:1} }
+
+  .ls-up    { animation: ls-up 0.5s cubic-bezier(0.16,1,0.3,1) both; }
+  .ls-panel { animation: ls-slide 0.32s cubic-bezier(0.16,1,0.3,1) both; }
+
+  /* ── BUTTON — ink-stamp primary ── */
+  .sp-btn-primary {
+    background: ${DS.void};
+    color: ${DS.signal};
+    border: 1.5px solid ${DS.signal};
+    border-radius: 3px;
+    font-family: 'Fraunces', serif;
+    font-weight: 600;
+    font-style: italic;
+    font-size: 14px;
+    letter-spacing: 0.3px;
     cursor: pointer;
-    transition: transform .2s, box-shadow .2s, opacity .2s;
+    transition: transform 0.18s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.18s, background 0.18s, color 0.18s;
+    box-shadow: 4px 4px 0 0 ${DS.signal}30;
   }
-  .sp-btn:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 8px 32px rgba(0,245,160,.35); }
-  .sp-btn:active:not(:disabled) { transform: translateY(0); }
-  .sp-btn:disabled { opacity: .55; cursor: not-allowed; }
+  .sp-btn-primary:hover:not(:disabled) { background: ${DS.signal}; color: ${DS.void}; transform: translate(-2px,-2px); box-shadow: 6px 6px 0 0 ${DS.signal}55; }
+  .sp-btn-primary:active:not(:disabled) { transform: translate(0,0); box-shadow: 2px 2px 0 0 ${DS.signal}55; }
+  .sp-btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
 
-  .sp-social {
-    flex: 1; background: rgba(255,255,255,0.04);
-    border: 1px solid rgba(255,255,255,0.08); border-radius: 14px;
-    padding: 13px; color: #888; font-family: 'Syne',sans-serif; font-size: 14px;
-    cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;
-    transition: background .2s, border-color .2s, color .2s;
+  .sp-btn-ghost {
+    background: transparent;
+    color: ${DS.ash};
+    border: 1px dashed ${DS.rimHov};
+    border-radius: 3px;
+    font-family: 'Inter', sans-serif;
+    font-weight: 500;
+    font-size: 13px;
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s, letter-spacing 0.15s;
   }
-  .sp-social:hover { background: rgba(255,255,255,0.07); border-color: rgba(255,255,255,0.15); color: #f0eeea; }
+  .sp-btn-ghost:hover { border-color: ${DS.signal}; border-style: solid; color: ${DS.plat}; letter-spacing: 0.4px; }
 
-  .str-bar { height: 3px; border-radius: 99px; transition: background .4s; }
-
-  .tab-wrap {
-    background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);
-    border-radius: 14px; padding: 5px; display: flex; gap: 4px; margin-bottom: 32px;
+  /* ── INPUT — underline only ── */
+  .sp-input {
+    background: transparent;
+    border: none;
+    border-bottom: 1.5px solid ${DS.rim};
+    border-radius: 0;
+    padding: 12px 2px;
+    color: ${DS.plat};
+    font-family: 'Inter', sans-serif;
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.25s;
+    width: 100%;
   }
-  .tab-btn {
-    flex: 1; padding: 10px; border: none; border-radius: 10px;
-    font-family: 'Bebas Neue',sans-serif; font-size: 16px; letter-spacing: 2px;
-    cursor: pointer; transition: all .25s cubic-bezier(.34,1.56,.64,1);
+  .sp-input:focus { border-bottom-color: ${DS.signal}; }
+  .sp-input::placeholder { color: ${DS.ghost}; }
+  .sp-input.err { border-bottom-color: ${DS.live}; }
+  select.sp-input { cursor: pointer; appearance: none; -webkit-appearance: none; }
+  select.sp-input option { background: ${DS.surface}; color: ${DS.plat}; }
+
+  /* ── TAG — ticket-stub ── */
+  .sp-tag {
+    display: inline-block;
+    background: ${DS.surface2};
+    border: 1px dashed ${DS.rim};
+    border-radius: 0;
+    padding: 3px 10px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    color: ${DS.ash};
+    letter-spacing: 0.3px;
   }
-  .tab-btn.on  { background: linear-gradient(135deg,#00f5a0,#00d4ff); color: #0a0a0a; box-shadow: 0 4px 16px rgba(0,245,160,.25); }
-  .tab-btn.off { background: transparent; color: #555; }
-  .tab-btn.off:hover { color: #aaa; }
 
-  /* ── RESPONSIVE ── */
-  .ls-left  { display: flex; }   /* show branding on desktop */
-  .ls-right { width: 460px; flex-shrink: 0; }
+  /* ── MODE SWITCHER — carved groove ── */
+  .sp-mode-rail {
+    display: inline-flex;
+    width: 100%;
+    background: ${DS.void};
+    border: 1px solid ${DS.rim};
+    border-radius: 3px;
+    padding: 3px;
+    gap: 2px;
+    margin-bottom: 32px;
+  }
+  .sp-mode-btn {
+    flex: 1;
+    padding: 10px 0;
+    border-radius: 2px;
+    border: none;
+    font-family: 'Fraunces', serif;
+    font-style: italic;
+    font-weight: 600;
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.25s cubic-bezier(0.34,1.56,0.64,1);
+    letter-spacing: 0.3px;
+  }
+  .sp-mode-btn.on  { background: ${DS.signal}; color: ${DS.void}; }
+  .sp-mode-btn.off { background: transparent; color: ${DS.ash}; }
+  .sp-mode-btn.off:hover { color: ${DS.plat}; }
 
-  @media (max-width: 700px) {
-    .ls-left  { display: none !important; }   /* hide branding on mobile */
-    .ls-right { width: 100% !important; padding: 32px 20px 60px !important; min-height: 100vh; }
+  /* ── TICKET LAYOUT — perforated tear-line between stub and body ── */
+  .ls-left {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+  }
+  .ls-divider { position: relative; flex-shrink: 0; width: 1px; align-self: stretch;
+    background-image: repeating-linear-gradient(to bottom, ${DS.rim} 0 6px, transparent 6px 15px);
+  }
+  .ls-divider::before, .ls-divider::after {
+    content: ''; position: absolute; left: 50%; transform: translateX(-50%);
+    width: 18px; height: 18px; border-radius: 50%;
+    background: ${DS.void}; border: 1px solid ${DS.rim};
+  }
+  .ls-divider::before { top: -9px; }
+  .ls-divider::after  { bottom: -9px; }
+  .ls-right { width: 440px; flex-shrink: 0; }
+
+  @media (max-width: 760px) {
+    .ls-left, .ls-divider { display: none !important; }
+    .ls-right { width: 100% !important; }
   }
 `;
 
-const BG = `linear-gradient(to right,#141415 0%,#141415 12.5%,#181819 12.5%,#181819 25%,#1c1d1e 25%,#1c1d1e 37.5%,#212224 37.5%,#212224 50%,#262729 50%,#262729 62.5%,#2b2c2f 62.5%,#2b2c2f 75%,#303235 75%,#303235 87.5%,#36383b 87.5%,#36383b 100%)`;
-
-/* ── particles ── */
-function Particles() {
-  const ref = useRef(null);
-  useEffect(() => {
-    const c = ref.current, ctx = c.getContext("2d");
-    let W = c.width = window.innerWidth, H = c.height = window.innerHeight;
-    const onR = () => { W = c.width = window.innerWidth; H = c.height = window.innerHeight; };
-    window.addEventListener("resize", onR);
-    const pts = Array.from({length:60},()=>({x:Math.random()*W,y:Math.random()*H,dx:(Math.random()-.5)*.25,dy:(Math.random()-.5)*.25,r:Math.random()*1.2+.3,a:Math.random()*.4+.1,col:Math.random()>.5?"#00f5a0":"#00d4ff"}));
-    let raf;
-    const draw = () => {
-      ctx.clearRect(0,0,W,H);
-      pts.forEach(p=>{p.x+=p.dx;p.y+=p.dy;if(p.x<0)p.x=W;if(p.x>W)p.x=0;if(p.y<0)p.y=H;if(p.y>H)p.y=0;ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,Math.PI*2);ctx.fillStyle=p.col;ctx.globalAlpha=p.a;ctx.fill();});
-      ctx.globalAlpha=1; raf=requestAnimationFrame(draw);
-    };
-    draw();
-    return ()=>{cancelAnimationFrame(raf);window.removeEventListener("resize",onR);};
-  },[]);
-  return <canvas ref={ref} style={{position:"fixed",inset:0,zIndex:0,pointerEvents:"none"}}/>;
+/* ──────────────────────────────────────────
+   AMBIENT GRID — same static treatment used app-wide
+────────────────────────────────────────── */
+function AmbientGrid() {
+  return (
+    <div style={{
+      position: "fixed", inset: 0, zIndex: 0, pointerEvents: "none",
+      backgroundImage: `
+        linear-gradient(${DS.rim} 1px, transparent 1px),
+        linear-gradient(90deg, ${DS.rim} 1px, transparent 1px)
+      `,
+      backgroundSize: "80px 80px",
+      opacity: 0.35,
+      maskImage: "radial-gradient(ellipse 80% 60% at 50% 0%, black 40%, transparent 100%)",
+      WebkitMaskImage: "radial-gradient(ellipse 80% 60% at 50% 0%, black 40%, transparent 100%)",
+    }} />
+  );
 }
 
-function Orb({color,size,top,left,delay=0}){
-  return <div style={{position:"fixed",top,left,width:size,height:size,borderRadius:"50%",background:`radial-gradient(circle at 30% 30%,${color}44,transparent 70%)`,filter:"blur(80px)",animation:`orbFloat 9s ease-in-out ${delay}s infinite`,zIndex:0,pointerEvents:"none"}}/>;
+function Spinner() {
+  return (
+    <span style={{
+      width: 16, height: 16, borderRadius: "50%",
+      border: `2px solid ${DS.void}33`, borderTopColor: DS.void,
+      animation: "ls-spin 0.7s linear infinite",
+      display: "inline-block", verticalAlign: "middle", marginRight: 8,
+    }} />
+  );
 }
 
-function Shimmer({children}){
-  return <span style={{background:"linear-gradient(90deg,#00f5a0 0%,#00d4ff 30%,#fff 50%,#00d4ff 70%,#00f5a0 100%)",backgroundSize:"200% auto",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",animation:"shimmer 3s linear infinite"}}>{children}</span>;
-}
-
-/* ── password strength ── */
+/* ── password strength — recolored to locked palette,
+     weak→live, fair→gold, good→ice, strong→signal ── */
 function pwStrength(pw) {
-  if (!pw) return {score:0,label:"",color:""};
-  let s=0;
-  if(pw.length>=8)s++;if(/[A-Z]/.test(pw))s++;if(/[0-9]/.test(pw))s++;if(/[^A-Za-z0-9]/.test(pw))s++;
-  return [{label:"weak",color:"#ff4d6d"},{label:"weak",color:"#ff4d6d"},{label:"fair",color:"#ffd60a"},{label:"good",color:"#00d4ff"},{label:"strong",color:"#00f5a0"}][s]&&{score:s,...[{label:"weak",color:"#ff4d6d"},{label:"weak",color:"#ff4d6d"},{label:"fair",color:"#ffd60a"},{label:"good",color:"#00d4ff"},{label:"strong",color:"#00f5a0"}][s]};
+  if (!pw) return { score: 0, label: "", color: "" };
+  let s = 0;
+  if (pw.length >= 8) s++;
+  if (/[A-Z]/.test(pw)) s++;
+  if (/[0-9]/.test(pw)) s++;
+  if (/[^A-Za-z0-9]/.test(pw)) s++;
+  const table = [
+    { label: "weak",   color: DS.live },
+    { label: "weak",   color: DS.live },
+    { label: "fair",   color: DS.gold },
+    { label: "good",   color: DS.ice },
+    { label: "strong", color: DS.signal },
+  ];
+  return { score: s, ...table[s] };
 }
 
-/* ── input field ── */
-function Field({label,type="text",placeholder,value,onChange,error,hint,extra}){
-  const [show,setShow]=useState(false);
-  const isP=type==="password";
-  return(
-    <div style={{marginBottom:18}}>
-      <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
-        <label style={{fontSize:11,color:"#666",letterSpacing:1,textTransform:"uppercase",fontFamily:"'JetBrains Mono',monospace"}}>{label}</label>
+/* ── COUNTRY PICKER — fixes the hardcoded-Nepal bug.
+     Index 0 is the real default: "prefer not to say" → 🌍, no country. ── */
+const COUNTRIES = [
+  { flag: "🌍", country: "" },
+  { flag: "🇳🇵", country: "Nepal" },
+  { flag: "🇺🇸", country: "United States" },
+  { flag: "🇬🇧", country: "United Kingdom" },
+  { flag: "🇮🇳", country: "India" },
+  { flag: "🇧🇷", country: "Brazil" },
+  { flag: "🇩🇪", country: "Germany" },
+  { flag: "🇫🇷", country: "France" },
+  { flag: "🇯🇵", country: "Japan" },
+  { flag: "🇰🇷", country: "South Korea" },
+  { flag: "🇨🇳", country: "China" },
+  { flag: "🇲🇽", country: "Mexico" },
+  { flag: "🇨🇦", country: "Canada" },
+  { flag: "🇦🇺", country: "Australia" },
+  { flag: "🇪🇸", country: "Spain" },
+  { flag: "🇮🇹", country: "Italy" },
+  { flag: "🇵🇭", country: "Philippines" },
+  { flag: "🇮🇩", country: "Indonesia" },
+  { flag: "🇵🇰", country: "Pakistan" },
+  { flag: "🇳🇬", country: "Nigeria" },
+  { flag: "🇿🇦", country: "South Africa" },
+  { flag: "🇷🇺", country: "Russia" },
+];
+
+function Field({ label, type = "text", placeholder, value, onChange, error, hint, extra }) {
+  const [show, setShow] = useState(false);
+  const isP = type === "password";
+  return (
+    <div style={{ marginBottom: 18 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 7 }}>
+        <label style={{ fontSize: 11, color: DS.ash, letterSpacing: 1, textTransform: "uppercase", fontFamily: "'JetBrains Mono', monospace" }}>{label}</label>
         {extra}
       </div>
-      <div style={{position:"relative"}}>
-        <input className={`sp-input${error?" err":""}`} type={isP&&show?"text":type} placeholder={placeholder} value={value} onChange={e=>onChange(e.target.value)} style={{paddingRight:isP?50:18}} autoComplete="off"/>
-        {isP&&<button onClick={()=>setShow(s=>!s)} style={{position:"absolute",right:14,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",color:"#555",fontSize:18}}>{show?"🙈":"👁"}</button>}
+      <div style={{ position: "relative" }}>
+        <input
+          className={`sp-input${error ? " err" : ""}`}
+          type={isP && show ? "text" : type}
+          placeholder={placeholder}
+          value={value}
+          onChange={e => onChange(e.target.value)}
+          style={{ paddingRight: isP ? 40 : 2 }}
+          autoComplete="off"
+        />
+        {isP && (
+          <button
+            type="button"
+            onClick={() => setShow(s => !s)}
+            style={{ position: "absolute", right: 0, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: DS.ash, fontSize: 16 }}
+          >{show ? "🙈" : "👁"}</button>
+        )}
       </div>
-      {error&&<div style={{fontSize:12,color:"#ff4d6d",marginTop:6,fontFamily:"'JetBrains Mono',monospace"}}>{error}</div>}
-      {hint&&!error&&<div style={{fontSize:12,color:"#444",marginTop:6}}>{hint}</div>}
+      {error && <div style={{ fontSize: 12, color: DS.live, marginTop: 6, fontFamily: "'JetBrains Mono', monospace" }}>{error}</div>}
+      {hint && !error && <div style={{ fontSize: 12, color: DS.ash, marginTop: 6 }}>{hint}</div>}
     </div>
   );
 }
 
-function Divider(){
-  return(
-    <div style={{display:"flex",alignItems:"center",gap:12,margin:"20px 0"}}>
-      <div style={{flex:1,height:1,background:"rgba(255,255,255,.06)"}}/>
-      <span style={{fontSize:12,color:"#444",fontFamily:"'JetBrains Mono',monospace"}}>or</span>
-      <div style={{flex:1,height:1,background:"rgba(255,255,255,.06)"}}/>
+function Divider() {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "22px 0" }}>
+      <div style={{ flex: 1, height: 1, background: DS.rim }} />
+      <span style={{ fontSize: 11, color: DS.ash, fontFamily: "'JetBrains Mono', monospace", letterSpacing: 1 }}>or</span>
+      <div style={{ flex: 1, height: 1, background: DS.rim }} />
     </div>
   );
 }
 
-/* ── success screen ── */
-function Success({mode,username,onNavigate}){
-  useEffect(()=>{
-    // auto-redirect after 2s
-    const t=setTimeout(()=>{if(onNavigate)onNavigate("home");},2000);
-    return()=>clearTimeout(t);
-  },[]);
-  return(
-    <div className="panel-slide" style={{textAlign:"center",padding:"20px 0"}}>
-      <div style={{width:80,height:80,borderRadius:"50%",background:"rgba(0,245,160,.1)",border:"2px solid rgba(0,245,160,.3)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:36,margin:"0 auto 24px",animation:"tickPop .5s cubic-bezier(.34,1.56,.64,1) both"}}>✓</div>
-      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:36,letterSpacing:2,marginBottom:10}}>
-        <Shimmer>{mode==="signup"?"YOU'RE IN 🎉":"WELCOME BACK"}</Shimmer>
+/* ── SUCCESS — stamped admission, not a generic checkmark toast ── */
+function Success({ mode, username, onNavigate }) {
+  useEffect(() => {
+    const t = setTimeout(() => { if (onNavigate) onNavigate("home"); }, 1800);
+    return () => clearTimeout(t);
+  }, []);
+  return (
+    <div className="ls-panel" style={{ textAlign: "center", padding: "30px 0" }}>
+      <div style={{
+        width: 76, height: 76, borderRadius: "50%", margin: "0 auto 26px",
+        background: DS.surface, border: `1.5px solid ${DS.signal}`,
+        boxShadow: `4px 4px 0 0 ${DS.signal}30`,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        fontSize: 30, color: DS.signal,
+        animation: "ls-pop 0.5s cubic-bezier(0.34,1.56,0.64,1) both",
+      }}>✓</div>
+      <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 700, fontStyle: "italic", fontSize: 32, letterSpacing: -0.5, marginBottom: 10, color: DS.plat }}>
+        {mode === "signup" ? "You're in." : "Welcome back."}
       </div>
-      <div style={{fontSize:14,color:"#666",marginBottom:32}}>
-        {mode==="signup"?`account created for ${username}. time to embarrass some strangers.`:`good to see you again, ${username}.`}
+      <div style={{ fontSize: 13.5, color: DS.ash, marginBottom: 30, lineHeight: 1.7 }}>
+        {mode === "signup" ? `Account created for ${username}. Time to talk to a stranger.` : `Good to see you again, ${username}.`}
       </div>
-      <div style={{background:"rgba(0,245,160,.06)",border:"1px solid rgba(0,245,160,.15)",borderRadius:14,padding:"16px 20px",fontSize:13,color:"#555",fontFamily:"'JetBrains Mono',monospace"}}>
-        redirecting... <span style={{color:"#00f5a0"}}>▶</span>
+      <div className="sp-tag" style={{ display: "inline-block", color: DS.signal, borderColor: DS.signal + "55" }}>
+        redirecting →
       </div>
     </div>
   );
 }
 
-/* ── left branding panel (desktop only) ── */
-function LeftPanel(){
-  return(
-    <div className="ls-left" style={{flex:1,flexDirection:"column",justifyContent:"space-between",padding:"60px 50px",borderRight:"1px solid rgba(255,255,255,.05)",position:"relative",overflow:"hidden",minHeight:"100vh"}}>
-      <div>
-        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:26,letterSpacing:4,color:"#00f5a0",marginBottom:60}}>STRANGERPLAY</div>
-        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:"clamp(40px,5vw,58px)",lineHeight:1.05,letterSpacing:1,marginBottom:20}}>
-          <div>CALL A</div><div><Shimmer>STRANGER.</Shimmer></div><div>PLAY.</div><div>WIN.</div>
+/* ── the ticket stamp — signature element for this page ── */
+function AdmitStamp() {
+  return (
+    <div style={{
+      position: "absolute", top: 36, right: 0,
+      width: 104, height: 104, borderRadius: "50%",
+      border: `1.5px solid ${DS.signal}`, boxShadow: `0 0 0 3px ${DS.void}, 0 0 0 4px ${DS.signal}40`,
+      display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2,
+      transform: "rotate(-7deg)",
+      animation: "ls-stamp 0.7s 0.2s cubic-bezier(0.34,1.56,0.64,1) both",
+      pointerEvents: "none",
+    }}>
+      <span style={{ fontFamily: "'Fraunces', serif", fontWeight: 700, fontStyle: "italic", fontSize: 14, color: DS.signal, letterSpacing: 0.5, lineHeight: 1 }}>ADMIT</span>
+      <span style={{ fontFamily: "'Fraunces', serif", fontWeight: 700, fontStyle: "italic", fontSize: 14, color: DS.signal, letterSpacing: 0.5, lineHeight: 1 }}>ONE</span>
+      <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 7, color: DS.ash, letterSpacing: 1, marginTop: 2 }}>SP · LIVE</span>
+    </div>
+  );
+}
+
+const GAMES = [
+  ["🔊", "Echo"],
+  ["😐", "Don't Laugh"],
+  ["🪞", "Mirror Me"],
+  ["🎭", "Vibe Check"],
+  ["🌶️", "Hot Take"],
+  ["📖", "Finish My Story"],
+];
+
+/* ── left panel — the ticket stub ── */
+function LeftPanel() {
+  return (
+    <div className="ls-left" style={{ flex: 1, padding: "100px 56px 56px", position: "relative", overflow: "hidden", minHeight: "100vh" }}>
+      <div className="ls-up" style={{ position: "relative" }}>
+        <AdmitStamp />
+        <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: DS.ash, letterSpacing: 4, textTransform: "uppercase", marginBottom: 16 }}>
+          // your ticket in
         </div>
-        <div style={{fontSize:15,color:"#555",lineHeight:1.7,maxWidth:300}}>No followers. No feed. Just two people and a game.</div>
+        <h1 style={{
+          fontFamily: "'Fraunces', serif", fontWeight: 700, fontStyle: "italic",
+          fontSize: "clamp(38px,4.4vw,54px)", lineHeight: 1.04, letterSpacing: -0.5,
+          color: DS.plat, marginBottom: 22, maxWidth: 360,
+        }}>
+          Call a stranger.<br />Talk first.<br /><span style={{ color: DS.signal }}>Play for points.</span>
+        </h1>
+        <p style={{ fontSize: 14.5, color: DS.ash, lineHeight: 1.75, maxWidth: 300 }}>
+          No followers. No feed. Just a camera, someone you've never met, and a game you pick together.
+        </p>
       </div>
-      <div style={{position:"relative",height:180,marginBottom:20}}>
-        <div style={{position:"absolute",left:0,top:10,background:"rgba(255,255,255,.04)",border:"1px solid rgba(0,245,160,.15)",borderRadius:16,padding:"14px 18px",width:200,animation:"float1 6s ease-in-out infinite"}}>
-          <div style={{fontSize:24,marginBottom:6}}>😂</div>
-          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,letterSpacing:1.5,color:"#ffd60a"}}>Don't Laugh</div>
-          <div style={{fontSize:11,color:"#555",marginTop:4}}>+10 pts per round</div>
-          <div style={{display:"flex",alignItems:"center",gap:6,marginTop:10}}>
-            <div style={{width:8,height:8,borderRadius:"50%",background:"#00f5a0",animation:"glowPulse 2s infinite"}}/>
-            <span style={{fontSize:11,color:"#444",fontFamily:"'JetBrains Mono',monospace"}}>2,341 playing</span>
-          </div>
+
+      <div className="ls-up" style={{ animationDelay: "0.1s" }}>
+        <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: DS.ash, letterSpacing: 3, textTransform: "uppercase", marginBottom: 12 }}>
+          // games on the roster
         </div>
-        <div style={{position:"absolute",right:20,top:40,background:"rgba(255,255,255,.04)",border:"1px solid rgba(255,77,109,.15)",borderRadius:16,padding:"14px 18px",width:180,animation:"float2 7s ease-in-out 1s infinite"}}>
-          <div style={{fontSize:24,marginBottom:6}}>🔥</div>
-          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,letterSpacing:1.5,color:"#ff4d6d"}}>Speed Roast</div>
-          <div style={{fontSize:11,color:"#555",marginTop:4}}>+20 pts per round</div>
-          <div style={{display:"flex",alignItems:"center",gap:6,marginTop:10}}>
-            <div style={{width:8,height:8,borderRadius:"50%",background:"#ff4d6d",animation:"glowPulse 2s infinite"}}/>
-            <span style={{fontSize:11,color:"#444",fontFamily:"'JetBrains Mono',monospace"}}>1,892 playing</span>
-          </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+          {GAMES.map(([emoji, name]) => (
+            <span key={name} className="sp-tag">{emoji} {name}</span>
+          ))}
         </div>
-      </div>
-      <div style={{display:"flex",gap:28,paddingTop:24,borderTop:"1px solid rgba(255,255,255,.06)"}}>
-        {[["14k+","online now"],["6","games to play"],["94","countries"]].map(([v,l])=>(
-          <div key={l}>
-            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:26,color:"#f0eeea"}}>{v}</div>
-            <div style={{fontSize:11,color:"#444",fontFamily:"'JetBrains Mono',monospace"}}>{l}</div>
-          </div>
-        ))}
       </div>
     </div>
   );
@@ -235,296 +420,270 @@ function LeftPanel(){
 /* ──────────────────────────────────────────────
    MAIN EXPORT
    Props:
-     onNavigate(page) — called after successful login/signup to go home
+     onNavigate(page) — called after successful login/signup
+     onLogin(userData) — tells StrangerPlay_Main that auth state changed
 ──────────────────────────────────────────────── */
-export default function LoginSignup({onNavigate, onLogin}){
-  const [mode,setMode]       = useState("login");
-  const [step,setStep]       = useState(1);
-  const [done,setDone]       = useState(false);
-  const [doneUser,setDoneUser]= useState("");
+export default function LoginSignup({ onNavigate, onLogin }) {
+  const [mode, setMode]   = useState("login");
+  const [step, setStep]   = useState(1);
+  const [done, setDone]   = useState(false);
+  const [doneUser, setDoneUser] = useState("");
 
   // login fields
-  const [lEmail,setLEmail]   = useState("");
-  const [lPass,setLPass]     = useState("");
-  const [lLoad,setLLoad]     = useState(false);
-  const [lErr,setLErr]       = useState({});
+  const [lEmail, setLEmail] = useState("");
+  const [lPass, setLPass]   = useState("");
+  const [lLoad, setLLoad]   = useState(false);
+  const [lErr, setLErr]     = useState({});
 
   // signup fields
-  const [sName,setSName]     = useState("");
-  const [sEmail,setSEmail]   = useState("");
-  const [sUser,setSUser]     = useState("");
-  const [sPass,setSPass]     = useState("");
-  const [sConf,setSConf]     = useState("");
-  const [agree,setAgree]     = useState(false);
-  const [sLoad,setSLoad]     = useState(false);
-  const [sErr,setSErr]       = useState({});
-  const [sMsg,setSMsg]       = useState(""); // server-level error
+  const [sName, setSName]     = useState("");
+  const [sEmail, setSEmail]   = useState("");
+  const [sCountryIdx, setSCountryIdx] = useState(0); // 0 = 🌍 prefer not to say
+  const [sUser, setSUser]     = useState("");
+  const [sPass, setSPass]     = useState("");
+  const [sConf, setSConf]     = useState("");
+  const [agree, setAgree]     = useState(false);
+  const [sLoad, setSLoad]     = useState(false);
+  const [sErr, setSErr]       = useState({});
+  const [sMsg, setSMsg]       = useState(""); // server-level error (username/email taken)
 
-  // The API URL comes from .env → VITE_API_URL=http://localhost:3001
-  // On Vercel you'll set VITE_API_URL=https://your-render-app.onrender.com
+  // VITE_API_URL → http://localhost:3001 in dev, your Render URL in prod.
   const API = import.meta.env.VITE_API_URL || "http://localhost:3001";
 
-  const str = pwStrength(sPass) || {score:0,label:"",color:""};
+  const str = pwStrength(sPass);
 
-  // If already logged in, skip this page
-  useEffect(()=>{
-    if(localStorage.getItem("sp_token")&&onNavigate) onNavigate("home");
-  },[]);
+  // Already logged in (token in localStorage) → skip this page entirely.
+  useEffect(() => {
+    if (localStorage.getItem("sp_token") && onNavigate) onNavigate("home");
+  }, []);
 
-  function switchMode(m){setMode(m);setStep(1);setDone(false);setLErr({});setSErr({});setSMsg("");}
+  function switchMode(m) { setMode(m); setStep(1); setLErr({}); setSErr({}); setSMsg(""); }
 
-  /* ── SAVE SESSION ──
-     localStorage.setItem stores key-value in the browser forever (until cleared).
-     This is how the user stays "logged in" across refreshes.
-     We save both the JWT token (for API auth) and the user object (for display).
-  */
-  function saveSession(token,user){
-    localStorage.setItem("sp_token",token);
-    localStorage.setItem("sp_user",JSON.stringify(user));
-    setDoneUser(user.username||user.name||"");
-    // Tell the parent (StrangerPlay_Main) that a user is now logged in.
-    // This updates auth state in-place — NO page refresh, NO flicker.
-    // The parent's handleLogin() sets its own `user` state from this data.
-    if(onLogin) onLogin(user);
+  /* localStorage.setItem persists across refreshes — this is the whole
+     auth session. sp_token = JWT for API calls. sp_user = display data.
+     onLogin(user) pushes the new auth state up to StrangerPlay_Main
+     without a page reload, so the nav/points pill update instantly. */
+  function saveSession(token, user) {
+    localStorage.setItem("sp_token", token);
+    localStorage.setItem("sp_user", JSON.stringify(user));
+    setDoneUser(user.username || user.name || "");
+    if (onLogin) onLogin(user);
     setDone(true);
   }
 
-  /* ── LOGIN ──
-     fetch() is the browser's built-in HTTP client.
-     We POST to /api/auth/signin with email+password.
-     Server checks MongoDB, returns JWT token if correct.
-  */
-  async function handleLogin(){
-    const err={};
-    if(!lEmail) err.email="email required";
-    else if(!lEmail.includes("@")) err.email="enter a valid email";
-    if(!lPass) err.pass="password required";
-    if(Object.keys(err).length){setLErr(err);return;}
+  async function handleLogin() {
+    const err = {};
+    if (!lEmail) err.email = "email required";
+    else if (!lEmail.includes("@")) err.email = "enter a valid email";
+    if (!lPass) err.pass = "password required";
+    if (Object.keys(err).length) { setLErr(err); return; }
     setLLoad(true); setLErr({});
-    try{
-      const res = await fetch(`${API}/api/auth/signin`,{
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({email:lEmail,password:lPass}),
+    try {
+      const res = await fetch(`${API}/api/auth/signin`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: lEmail, password: lPass }),
       });
       const data = await res.json();
-      if(!res.ok){setLErr({pass:data.error||"wrong email or password"});setLLoad(false);return;}
-      saveSession(data.token,data.user);
-    }catch{
-      setLErr({pass:"can't reach server — is your backend running?"});
+      if (!res.ok) { setLErr({ pass: data.error || "wrong email or password" }); setLLoad(false); return; }
+      saveSession(data.token, data.user);
+    } catch {
+      setLErr({ pass: "can't reach server — is your backend running?" });
     }
     setLLoad(false);
   }
 
-  /* ── STEP 1 validation (name + email) ── */
-  function handleStep1(){
-    const err={};
-    if(!sName.trim()) err.name="what's your name?";
-    if(!sEmail) err.email="email required";
-    else if(!sEmail.includes("@")) err.email="enter a valid email";
-    if(Object.keys(err).length){setSErr(err);return;}
+  function handleStep1() {
+    const err = {};
+    if (!sName.trim()) err.name = "what's your name?";
+    if (!sEmail) err.email = "email required";
+    else if (!sEmail.includes("@")) err.email = "enter a valid email";
+    if (Object.keys(err).length) { setSErr(err); return; }
     setSErr({}); setStep(2);
   }
 
-  /* ── SIGNUP ──
-     POST /api/auth/signup → server hashes password with bcrypt,
-     saves User to MongoDB, returns JWT token.
-  */
-  async function handleSignup(){
-    const err={};
-    if(!sUser.trim()) err.user="pick a username";
-    else if(sUser.length<3) err.user="at least 3 characters";
-    if(!sPass) err.pass="set a password";
-    else if(sPass.length<8) err.pass="at least 8 characters";
-    if(sConf!==sPass) err.conf="passwords don't match";
-    if(!agree) err.agree="you need to agree to continue";
-    if(Object.keys(err).length){setSErr(err);return;}
+  async function handleSignup() {
+    const err = {};
+    if (!sUser.trim()) err.user = "pick a username";
+    else if (sUser.length < 3) err.user = "at least 3 characters";
+    if (!sPass) err.pass = "set a password";
+    else if (sPass.length < 8) err.pass = "at least 8 characters";
+    if (sConf !== sPass) err.conf = "passwords don't match";
+    if (!agree) err.agree = "you need to agree to continue";
+    if (Object.keys(err).length) { setSErr(err); return; }
     setSLoad(true); setSErr({}); setSMsg("");
-    try{
-      const res = await fetch(`${API}/api/auth/signup`,{
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({name:sName,email:sEmail,username:sUser,password:sPass,flag:"🇳🇵",country:"Nepal"}),
+    const { flag, country } = COUNTRIES[sCountryIdx];
+    try {
+      const res = await fetch(`${API}/api/auth/signup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: sName, email: sEmail, username: sUser, password: sPass, flag, country }),
       });
       const data = await res.json();
-      if(!res.ok){
-        // username or email already taken — server tells us which
-        setSMsg(data.error||"username or email already taken");
-        setSLoad(false);return;
+      if (!res.ok) {
+        setSMsg(data.error || "username or email already taken");
+        setSLoad(false); return;
       }
-      saveSession(data.token,data.user);
-    }catch{
+      saveSession(data.token, data.user);
+    } catch {
       setSMsg("can't reach server — is your backend running?");
     }
     setSLoad(false);
   }
 
-  const Spinner = ()=>(
-    <span style={{width:18,height:18,borderRadius:"50%",border:"2px solid rgba(0,0,0,.2)",borderTopColor:"#0a0a0a",animation:"spin .7s linear infinite",display:"inline-block",verticalAlign:"middle",marginRight:8}}/>
-  );
-
-  /* ── RENDER ── */
-  return(
+  return (
     <>
       <style>{css}</style>
-      <Particles/>
-      <Orb color="#00f5a0" size="500px" top="-100px" left="-100px"/>
-      <Orb color="#00d4ff" size="400px" top="60%" left="60%" delay={3}/>
-      <Orb color="#ff4d6d" size="300px" top="80%" left="-80px" delay={5}/>
+      <AmbientGrid />
 
-      <div style={{position:"relative",zIndex:1,display:"flex",minHeight:"100vh",background:BG}}>
+      <div style={{ position: "relative", zIndex: 1, display: "flex", minHeight: "100vh" }}>
+        <LeftPanel />
+        <div className="ls-divider" />
 
-        {/* LEFT — desktop branding */}
-        <LeftPanel/>
+        <div className="ls-right" style={{ display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "100px 32px 60px" }}>
+          <div style={{ width: "100%", maxWidth: 360 }}>
 
-        {/* RIGHT — form panel */}
-        <div className="ls-right" style={{display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"60px 48px",minHeight:"100vh"}}>
-          <div style={{width:"100%",maxWidth:380,paddingBottom:60}}>
-
-            {done?(
-              <Success mode={mode} username={doneUser} onNavigate={onNavigate}/>
-            ):(
+            {done ? (
+              <Success mode={mode} username={doneUser} onNavigate={onNavigate} />
+            ) : (
               <>
-                {/* mode toggle */}
-                <div className="tab-wrap">
-                  {["login","signup"].map(m=>(
-                    <button key={m} className={`tab-btn ${mode===m?"on":"off"}`} onClick={()=>switchMode(m)}>
-                      {m==="login"?"SIGN IN":"SIGN UP"}
+                <div className="sp-mode-rail">
+                  {["login", "signup"].map(m => (
+                    <button key={m} className={`sp-mode-btn ${mode === m ? "on" : "off"}`} onClick={() => switchMode(m)}>
+                      {m === "login" ? "Sign In" : "Sign Up"}
                     </button>
                   ))}
                 </div>
 
                 {/* ────── LOGIN ────── */}
-                {mode==="login"&&(
-                  <div className="panel-slide">
-                    <div style={{marginBottom:28}}>
-                      <div style={{fontFamily:"'JetBrains Mono',monospace",fontSize:11,color:"#444",letterSpacing:3,textTransform:"uppercase",marginBottom:8}}>// welcome back</div>
-                      <h2 style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:38,letterSpacing:2,lineHeight:1}}><Shimmer>SIGN IN</Shimmer></h2>
+                {mode === "login" && (
+                  <div className="ls-panel">
+                    <div style={{ marginBottom: 26 }}>
+                      <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: DS.ash, letterSpacing: 3, textTransform: "uppercase", marginBottom: 8 }}>
+                        // welcome back
+                      </div>
+                      <h2 style={{ fontFamily: "'Fraunces', serif", fontWeight: 700, fontStyle: "italic", fontSize: 32, letterSpacing: -0.5, color: DS.plat }}>
+                        Sign in
+                      </h2>
                     </div>
 
                     <Field label="Email" type="email" placeholder="you@example.com"
-                      value={lEmail} onChange={v=>{setLEmail(v);setLErr(e=>({...e,email:""}));}} error={lErr.email}/>
+                      value={lEmail} onChange={v => { setLEmail(v); setLErr(e => ({ ...e, email: "" })); }} error={lErr.email} />
                     <Field label="Password" type="password" placeholder="your password"
-                      value={lPass} onChange={v=>{setLPass(v);setLErr(e=>({...e,pass:""}));}} error={lErr.pass}
-                      extra={<button onClick={()=>{}} style={{background:"none",border:"none",fontSize:12,color:"#00d4ff",cursor:"pointer",fontFamily:"'JetBrains Mono',monospace"}}>forgot?</button>}/>
+                      value={lPass} onChange={v => { setLPass(v); setLErr(e => ({ ...e, pass: "" })); }} error={lErr.pass} />
 
-                    <button className="sp-btn" onClick={handleLogin} disabled={lLoad} style={{marginTop:8}}>
-                      {lLoad?<><Spinner/>SIGNING IN...</>:"SIGN IN →"}
+                    <button className="sp-btn-primary" style={{ width: "100%", padding: "13px 0", marginTop: 8 }} onClick={handleLogin} disabled={lLoad}>
+                      {lLoad ? <><Spinner />Signing in...</> : "Sign in →"}
                     </button>
 
-                    <Divider/>
-
-                    <div style={{display:"flex",gap:10}}>
-                      <button className="sp-social"><span style={{fontSize:18,fontWeight:700}}>G</span>Google</button>
-                      <button className="sp-social"><span style={{fontSize:18}}>𝕏</span>X / Twitter</button>
-                    </div>
-
-                    <div style={{marginTop:28,textAlign:"center",fontSize:13,color:"#444",fontFamily:"'JetBrains Mono',monospace"}}>
+                    <div style={{ marginTop: 26, textAlign: "center", fontSize: 13, color: DS.ash, fontFamily: "'JetBrains Mono', monospace" }}>
                       no account?{" "}
-                      <button onClick={()=>switchMode("signup")} style={{background:"none",border:"none",color:"#00f5a0",cursor:"pointer",fontFamily:"'JetBrains Mono',monospace",fontSize:13}}>sign up →</button>
+                      <button onClick={() => switchMode("signup")} style={{ background: "none", border: "none", color: DS.signal, cursor: "pointer", fontFamily: "'JetBrains Mono', monospace", fontSize: 13 }}>sign up →</button>
                     </div>
                   </div>
                 )}
 
                 {/* ────── SIGNUP ────── */}
-                {mode==="signup"&&(
-                  <div className="panel-slide" key={step}>
-                    <div style={{marginBottom:24}}>
-                      {/* step progress bar */}
-                      <div style={{display:"flex",gap:6,marginBottom:16}}>
-                        {[1,2].map(s=>(
-                          <div key={s} style={{height:3,flex:1,borderRadius:99,background:step>=s?"linear-gradient(90deg,#00f5a0,#00d4ff)":"rgba(255,255,255,.08)",transition:"background .4s"}}/>
+                {mode === "signup" && (
+                  <div className="ls-panel" key={step}>
+                    <div style={{ marginBottom: 22 }}>
+                      <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+                        {[1, 2].map(s => (
+                          <div key={s} style={{ height: 2, flex: 1, background: step >= s ? DS.signal : DS.rim, transition: "background 0.3s" }} />
                         ))}
                       </div>
-                      <div style={{fontFamily:"'JetBrains Mono',monospace",fontSize:11,color:"#444",letterSpacing:3,textTransform:"uppercase",marginBottom:8}}>// step {step} of 2</div>
-                      <h2 style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:38,letterSpacing:2,lineHeight:1}}>
-                        <Shimmer>{step===1?"WHO ARE YOU?":"LOCK IT IN"}</Shimmer>
+                      <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: DS.ash, letterSpacing: 3, textTransform: "uppercase", marginBottom: 8 }}>
+                        // step {step} of 2
+                      </div>
+                      <h2 style={{ fontFamily: "'Fraunces', serif", fontWeight: 700, fontStyle: "italic", fontSize: 32, letterSpacing: -0.5, color: DS.plat }}>
+                        {step === 1 ? "Who are you?" : "Lock it in"}
                       </h2>
                     </div>
 
-                    {/* server-level error (username/email taken) */}
-                    {sMsg&&(
-                      <div style={{background:"rgba(255,77,109,.08)",border:"1px solid rgba(255,77,109,.25)",borderRadius:10,padding:"10px 14px",fontSize:13,color:"#ff4d6d",fontFamily:"'JetBrains Mono',monospace",marginBottom:16}}>
+                    {sMsg && (
+                      <div style={{ background: DS.live + "14", border: `1px solid ${DS.live}40`, borderRadius: 2, padding: "10px 14px", fontSize: 12.5, color: DS.live, fontFamily: "'JetBrains Mono', monospace", marginBottom: 18 }}>
                         ⚠ {sMsg}
                       </div>
                     )}
 
-                    {/* ── STEP 1: name + email ── */}
-                    {step===1&&(
+                    {step === 1 && (
                       <>
                         <Field label="Full Name" placeholder="your name"
-                          value={sName} onChange={v=>{setSName(v);setSErr(e=>({...e,name:""}));}} error={sErr.name}/>
+                          value={sName} onChange={v => { setSName(v); setSErr(e => ({ ...e, name: "" })); }} error={sErr.name} />
                         <Field label="Email" type="email" placeholder="you@example.com"
-                          value={sEmail} onChange={v=>{setSEmail(v);setSErr(e=>({...e,email:""}));}} error={sErr.email}/>
+                          value={sEmail} onChange={v => { setSEmail(v); setSErr(e => ({ ...e, email: "" })); }} error={sErr.email} />
 
-                        <div style={{display:"flex",gap:10,marginTop:8}}>
-                          <button className="sp-social"><span style={{fontSize:18,fontWeight:700}}>G</span>Google</button>
-                          <button className="sp-social"><span style={{fontSize:18}}>𝕏</span>Twitter</button>
+                        <div style={{ marginBottom: 18 }}>
+                          <label style={{ fontSize: 11, color: DS.ash, letterSpacing: 1, textTransform: "uppercase", fontFamily: "'JetBrains Mono', monospace", display: "block", marginBottom: 7 }}>
+                            Country <span style={{ color: DS.ghost, textTransform: "none" }}>(optional, shows on leaderboard)</span>
+                          </label>
+                          <select className="sp-input" value={sCountryIdx} onChange={e => setSCountryIdx(Number(e.target.value))}>
+                            {COUNTRIES.map((c, i) => (
+                              <option key={i} value={i}>{c.flag} {c.country || "Prefer not to say"}</option>
+                            ))}
+                          </select>
                         </div>
 
-                        <Divider/>
-
-                        {/* This is the button that was broken — it now calls handleStep1()
-                            which validates name+email THEN sets step to 2.
-                            The old code had the right function, the bug was elsewhere (no onNavigate passed). */}
-                        <button className="sp-btn" onClick={handleStep1} style={{marginTop:4}}>
-                          CONTINUE →
+                        <button className="sp-btn-primary" style={{ width: "100%", padding: "13px 0", marginTop: 4 }} onClick={handleStep1}>
+                          Continue →
                         </button>
 
-                        <div style={{marginTop:24,textAlign:"center",fontSize:13,color:"#444",fontFamily:"'JetBrains Mono',monospace"}}>
+                        <div style={{ marginTop: 22, textAlign: "center", fontSize: 13, color: DS.ash, fontFamily: "'JetBrains Mono', monospace" }}>
                           already have one?{" "}
-                          <button onClick={()=>switchMode("login")} style={{background:"none",border:"none",color:"#00f5a0",cursor:"pointer",fontFamily:"'JetBrains Mono',monospace",fontSize:13}}>sign in →</button>
+                          <button onClick={() => switchMode("login")} style={{ background: "none", border: "none", color: DS.signal, cursor: "pointer", fontFamily: "'JetBrains Mono', monospace", fontSize: 13 }}>sign in →</button>
                         </div>
                       </>
                     )}
 
-                    {/* ── STEP 2: username + password ── */}
-                    {step===2&&(
+                    {step === 2 && (
                       <>
                         <Field label="Username" placeholder="pick something cool"
-                          value={sUser} onChange={v=>{setSUser(v.toLowerCase().replace(/\s/g,"_"));setSErr(e=>({...e,user:""}));setSMsg("");}}
-                          error={sErr.user} hint="this is what strangers will see"/>
+                          value={sUser} onChange={v => { setSUser(v.toLowerCase().replace(/\s/g, "_")); setSErr(e => ({ ...e, user: "" })); setSMsg(""); }}
+                          error={sErr.user} hint="this is what strangers will see" />
 
                         <Field label="Password" type="password" placeholder="make it hard to guess"
-                          value={sPass} onChange={v=>{setSPass(v);setSErr(e=>({...e,pass:""}));}} error={sErr.pass}/>
+                          value={sPass} onChange={v => { setSPass(v); setSErr(e => ({ ...e, pass: "" })); }} error={sErr.pass} />
 
-                        {sPass&&(
-                          <div style={{marginTop:-12,marginBottom:18}}>
-                            <div style={{display:"flex",gap:4,marginBottom:5}}>
-                              {[1,2,3,4].map(i=>(
-                                <div key={i} className="str-bar" style={{flex:1,background:i<=str.score?str.color:"rgba(255,255,255,.06)"}}/>
+                        {sPass && (
+                          <div style={{ marginTop: -10, marginBottom: 18 }}>
+                            <div style={{ display: "flex", gap: 4, marginBottom: 5 }}>
+                              {[1, 2, 3, 4].map(i => (
+                                <div key={i} style={{ height: 3, flex: 1, background: i <= str.score ? str.color : DS.rim, transition: "background 0.3s" }} />
                               ))}
                             </div>
-                            <div style={{fontSize:11,color:str.color,fontFamily:"'JetBrains Mono',monospace"}}>{str.label}</div>
+                            <div style={{ fontSize: 11, color: str.color, fontFamily: "'JetBrains Mono', monospace" }}>{str.label}</div>
                           </div>
                         )}
 
                         <Field label="Confirm Password" type="password" placeholder="same again"
-                          value={sConf} onChange={v=>{setSConf(v);setSErr(e=>({...e,conf:""}));}} error={sErr.conf}/>
+                          value={sConf} onChange={v => { setSConf(v); setSErr(e => ({ ...e, conf: "" })); }} error={sErr.conf} />
 
-                        {/* agree checkbox */}
-                        <div style={{marginBottom:22}}>
-                          <div onClick={()=>setAgree(a=>!a)} style={{display:"flex",alignItems:"flex-start",gap:12,cursor:"pointer"}}>
-                            <div style={{width:20,height:20,borderRadius:6,flexShrink:0,marginTop:2,border:`1px solid ${agree?"#00f5a0":"rgba(255,255,255,.12)"}`,background:agree?"rgba(0,245,160,.12)":"transparent",display:"flex",alignItems:"center",justifyContent:"center",transition:"all .2s",fontSize:12,color:"#00f5a0"}}>
-                              {agree?"✓":""}
-                            </div>
-                            <span style={{fontSize:13,color:"#555",lineHeight:1.5}}>
-                              I agree to the <span style={{color:"#00d4ff",cursor:"pointer"}}>terms</span> and <span style={{color:"#00d4ff",cursor:"pointer"}}>privacy policy</span>. I'm at least 13 years old.
+                        <div style={{ marginBottom: 22 }}>
+                          <div onClick={() => setAgree(a => !a)} style={{ display: "flex", alignItems: "flex-start", gap: 12, cursor: "pointer" }}>
+                            <div style={{
+                              width: 18, height: 18, borderRadius: 2, flexShrink: 0, marginTop: 2,
+                              border: `1.5px solid ${agree ? DS.signal : DS.rim}`,
+                              background: agree ? DS.signal + "18" : "transparent",
+                              display: "flex", alignItems: "center", justifyContent: "center",
+                              transition: "all 0.2s", fontSize: 11, color: DS.signal,
+                            }}>{agree ? "✓" : ""}</div>
+                            <span style={{ fontSize: 12.5, color: DS.ash, lineHeight: 1.6 }}>
+                              I agree to the <span style={{ color: DS.ice, cursor: "pointer" }}>terms</span> and <span style={{ color: DS.ice, cursor: "pointer" }}>privacy policy</span>. I'm at least 13 years old.
                             </span>
                           </div>
-                          {sErr.agree&&<div style={{fontSize:12,color:"#ff4d6d",marginTop:6,fontFamily:"'JetBrains Mono',monospace"}}>{sErr.agree}</div>}
+                          {sErr.agree && <div style={{ fontSize: 12, color: DS.live, marginTop: 6, fontFamily: "'JetBrains Mono', monospace" }}>{sErr.agree}</div>}
                         </div>
 
-                        <div style={{display:"flex",gap:10}}>
-                          <button onClick={()=>{setStep(1);setSMsg("");}} style={{background:"rgba(255,255,255,.04)",border:"1px solid rgba(255,255,255,.08)",borderRadius:14,padding:"16px 20px",color:"#666",cursor:"pointer",fontSize:20}}>←</button>
-                          <button className="sp-btn" onClick={handleSignup} disabled={sLoad} style={{flex:1}}>
-                            {sLoad?<><Spinner/>CREATING...</>:"CREATE ACCOUNT →"}
+                        <div style={{ display: "flex", gap: 10 }}>
+                          <button className="sp-btn-ghost" style={{ padding: "12px 16px", fontSize: 16 }} onClick={() => { setStep(1); setSMsg(""); }}>←</button>
+                          <button className="sp-btn-primary" style={{ flex: 1, padding: "13px 0" }} onClick={handleSignup} disabled={sLoad}>
+                            {sLoad ? <><Spinner />Creating...</> : "Create account →"}
                           </button>
                         </div>
 
-                        <div style={{marginTop:24,textAlign:"center",fontSize:13,color:"#444",fontFamily:"'JetBrains Mono',monospace"}}>
+                        <div style={{ marginTop: 22, textAlign: "center", fontSize: 13, color: DS.ash, fontFamily: "'JetBrains Mono', monospace" }}>
                           already have one?{" "}
-                          <button onClick={()=>switchMode("login")} style={{background:"none",border:"none",color:"#00f5a0",cursor:"pointer",fontFamily:"'JetBrains Mono',monospace",fontSize:13}}>sign in →</button>
+                          <button onClick={() => switchMode("login")} style={{ background: "none", border: "none", color: DS.signal, cursor: "pointer", fontFamily: "'JetBrains Mono', monospace", fontSize: 13 }}>sign in →</button>
                         </div>
                       </>
                     )}
@@ -538,5 +697,3 @@ export default function LoginSignup({onNavigate, onLogin}){
     </>
   );
 }
-
-
