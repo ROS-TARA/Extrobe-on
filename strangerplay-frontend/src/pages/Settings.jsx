@@ -468,7 +468,7 @@ export default function Settings({ onNavigate, user, onUserUpdate }) {
   const toastTimer = useRef(null);
 
   // API URL from .env — same pattern as LoginSignup
-  const API = import.meta.env.VITE_API_URL || "http://localhost:3001";
+  const API = import.meta.env.VITE_API_URL || "https://extrobe-on.onrender.com";
 
   /*
     ACCOUNT state — seeded from the real user object.

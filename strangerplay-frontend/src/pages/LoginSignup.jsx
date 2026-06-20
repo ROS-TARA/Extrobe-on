@@ -448,7 +448,7 @@ export default function LoginSignup({ onNavigate, onLogin }) {
   const [sMsg, setSMsg]       = useState(""); // server-level error (username/email taken)
 
   // VITE_API_URL → http://localhost:3001 in dev, your Render URL in prod.
-  const API = import.meta.env.VITE_API_URL || "http://localhost:3001";
+  const API = import.meta.env.VITE_API_URL || "https://extrobe-on.onrender.com";
 
   const str = pwStrength(sPass);
 

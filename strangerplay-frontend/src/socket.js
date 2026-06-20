@@ -19,7 +19,7 @@ import { io } from "socket.io-client";
   not a server. Netlify's build machine has no localhost server.
   The socket connects to nothing → queue:join goes nowhere → no match.
 */
-export const socket = io(import.meta.env.VITE_SOCKET_URL || "http://localhost:3001", {
+export const socket = io(import.meta.env.VITE_SOCKET_URL || "https://extrobe-on.onrender.com", {
   // Keep trying if Render is waking up (free tier sleeps after 15 min idle)
   reconnection: true,
   reconnectionAttempts: 15,
