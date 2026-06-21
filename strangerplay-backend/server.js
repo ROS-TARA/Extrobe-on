@@ -82,7 +82,10 @@ const io = new Server(server, {
 ───────────────────────────────────────────── */
 mongoose.connect(process.env.MONGO_URI || "mongodb://localhost:27017/strangerplay")
   .then(() => console.log("✅ MongoDB connected"))
-  .catch(e => console.error("❌ MongoDB error:", e.message));
+  .catch(e => {
+    console.error("❌ MongoDB  ERROR:");
+    console.error(e);
+  });
 
 const UserSchema = new mongoose.Schema({
   name:        { type: String, required: true },
