@@ -289,10 +289,13 @@ function VoteBar({ label, pct, color, isMe }) {
 ───────────────────────────────────────────── */
 export default function GameScreen({
   gameMode  = "dontlaugh",
+  roomId    = null,
+  role      = "offer",   // "offer" = caller, "answer" = callee — set by server on match:found
   opponent  = { name: "stranger_7829", flag: "🇧🇷", avatar: "🧑", pts: 3200 },
   entryFee  = 10,
   myPoints  = 74,
   onBack,
+  onMatchEnd,
 }) {
   const mode = MODES[gameMode] || MODES.dontlaugh;
 
@@ -318,13 +321,19 @@ export default function GameScreen({
   /* ── REFS ── */
   const videoRef      = useRef(null);   // hidden video — MediaPipe reads this
   const videoShowRef  = useRef(null);   // visible self-cam shown to user
+  const remoteVideoRef= useRef(null);   // BUGFIX: stranger's actual video — was never rendered before
   const overlayRef    = useRef(null);   // canvas for face landmark drawing
-  const animRef       = useRef(null);
-  const timerIvRef    = useRef(null);
-  const streamRef     = useRef(null);
+  const animRef        = useRef(null);
+  const timerIvRef     = useRef(null);
+  const streamRef       = useRef(null);
+  const pcRef            = useRef(null);   // RTCPeerConnection
+  const pendingIceRef    = useRef([]);     // ICE candidates that arrive before remote description is set
   const phaseRef      = useRef("loading");
   const roundRef      = useRef(1);
   const poseLMRef     = useRef(null);   // stored pose for Mirror Me
+
+  const [remoteConnected, setRemoteConnected] = useState(false);
+  const [remoteLeft,       setRemoteLeft]      = useState(false);
 
   /*
     faceTrack ref: MediaPipe onResults callback writes here.
@@ -338,6 +347,25 @@ export default function GameScreen({
     cheekRaise: 0,     // for tight smiles
     found: false,
   });
+
+  /*
+    BUGFIX — instant false-positive loss right after connecting:
+    ROOT CAUSE: smile detection fired on a SINGLE noisy frame with
+    zero smoothing. getMouthAspectRatio/getCheekRaise are both raw
+    per-frame ratios — the very first few frames after MediaPipe
+    locks onto a face (or after a round starts and the user is still
+    settling into position) are noisy: a slight head turn, blink, or
+    lighting flicker reads as "cheek raised" or "mouth open" for one
+    frame, instantly ending the round. There was no requirement for
+    sustained smiling, and no grace period after round start.
+    FIX: require N consecutive smiling frames (debounce) before
+    declaring a loss, AND ignore detections for a short grace window
+    right after each round begins (tracking is still stabilizing).
+  */
+  const smileStreakRef = useRef(0);
+  const roundStartTimeRef = useRef(0);
+  const SMILE_STREAK_REQUIRED = 4;   // ~4 consecutive frames at ~12fps ≈ 330ms of sustained smiling
+  const ROUND_GRACE_MS = 900;        // ignore smile detection for the first 900ms of a round
 
   const faceMeshRef = useRef(null);   // MediaPipe FaceMesh instance
   const mpCameraRef = useRef(null);   // MediaPipe Camera pump
@@ -447,7 +475,28 @@ export default function GameScreen({
           // Only trigger smile in Don't Laugh during playing phase
           // setSmileDetected is safe here because MediaPipe callback is NOT inside rAF
           if (phaseRef.current === "playing" && gameMode === "dontlaugh") {
-            setSmileDetected(smiling);
+            const withinGrace = (Date.now() - roundStartTimeRef.current) < ROUND_GRACE_MS;
+            if (withinGrace) {
+              // Still settling in — don't count smile frames yet, don't flash the warning border
+              smileStreakRef.current = 0;
+              setSmileDetected(false);
+            } else if (smiling) {
+              smileStreakRef.current += 1;
+              // Flash the warning border as soon as a smile is seen (visual feedback),
+              // but only actually END the round once it's sustained for several frames
+              setSmileDetected(true);
+              // BUGFIX: guard against firing handleRoundEnd multiple times.
+              // phaseRef.current updates asynchronously (one render behind),
+              // so without this check a sustained smile could call
+              // handleRoundEnd repeatedly in the few frames before phase
+              // actually flips away from "playing".
+              if (smileStreakRef.current === SMILE_STREAK_REQUIRED) {
+                handleRoundEnd("smiled");
+              }
+            } else {
+              smileStreakRef.current = 0;
+              setSmileDetected(false);
+            }
           }
         } else {
           faceTrack.current.found = false;
@@ -483,7 +532,162 @@ export default function GameScreen({
     if (mpCameraRef.current) mpCameraRef.current.stop();
     if (faceMeshRef.current) faceMeshRef.current.close();
     if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
+    // BUGFIX: tear down the peer connection too — was never created before, now must be closed
+    if (pcRef.current) { pcRef.current.close(); pcRef.current = null; }
+    if (socket && roomId) socket.emit("match:leave", { roomId });
   }
+
+  /*
+    ═══════════════════════════════════════════════════════════
+    BUGFIX — real WebRTC peer connection (the actual missing piece)
+    ROOT CAUSE: the app matched two players via socket.io and showed
+    each their OWN camera only. There was no RTCPeerConnection, no
+    offer/answer/ICE exchange — so neither player could ever see or
+    hear the other, and there was no real "call" to disconnect from
+    (only a local camera each kept running independently).
+    server.js already relays webrtc:offer / webrtc:answer / webrtc:ice
+    correctly — this effect is the missing client half that actually
+    uses those events to establish a real peer-to-peer connection.
+
+    Flow:
+      role === "offer"  → wait for local stream, create RTCPeerConnection,
+                           add local tracks, createOffer(), send via socket
+      role === "answer" → wait for local stream AND the incoming offer,
+                           create RTCPeerConnection, add local tracks,
+                           setRemoteDescription(offer), createAnswer(), send back
+      Both sides        → exchange ICE candidates as they trickle in,
+                           and render the remote stream into remoteVideoRef
+                           the moment ontrack fires.
+    ═══════════════════════════════════════════════════════════
+  */
+  useEffect(() => {
+    if (!roomId || !socket) return;
+    let cancelled = false;
+
+    // Free STUN server — helps peers behind NAT find each other.
+    // No TURN server configured — calls between two players on
+    // restrictive corporate/mobile NATs may fail to connect directly.
+    // Add a TURN server (e.g. Twilio, metered.ca) here if that happens often.
+    const PC_CONFIG = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+
+    function createPeerConnection() {
+      const pc = new RTCPeerConnection(PC_CONFIG);
+
+      // Local tracks → remote peer
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => pc.addTrack(track, streamRef.current));
+      }
+
+      // Remote tracks arrive → render them
+      pc.ontrack = (event) => {
+        if (cancelled) return;
+        const [remoteStream] = event.streams;
+        if (remoteVideoRef.current && remoteVideoRef.current.srcObject !== remoteStream) {
+          remoteVideoRef.current.srcObject = remoteStream;
+          remoteVideoRef.current.play().catch(() => {});
+        }
+        setRemoteConnected(true);
+      };
+
+      // Local ICE candidates → send to the other peer via the server relay
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          socket.emit("webrtc:ice", { roomId, candidate: event.candidate });
+        }
+      };
+
+      pc.onconnectionstatechange = () => {
+        if (pc.connectionState === "connected") setRemoteConnected(true);
+        if (pc.connectionState === "disconnected" || pc.connectionState === "failed") {
+          setRemoteConnected(false);
+        }
+      };
+
+      pcRef.current = pc;
+      return pc;
+    }
+
+    // Wait until the local camera stream exists before negotiating —
+    // tracks must be added to the peer connection before createOffer/createAnswer.
+    async function waitForLocalStream() {
+      let tries = 0;
+      while (!streamRef.current && tries < 100 && !cancelled) {
+        await new Promise(r => setTimeout(r, 100));
+        tries++;
+      }
+    }
+
+    async function startAsOfferer() {
+      await waitForLocalStream();
+      if (cancelled || !streamRef.current) return;
+      const pc = createPeerConnection();
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      socket.emit("webrtc:offer", { roomId, sdp: offer });
+    }
+
+    async function startAsAnswerer() {
+      await waitForLocalStream();
+      // answerer waits for the offer to arrive (handled in the socket listener below)
+    }
+
+    if (role === "offer") startAsOfferer();
+    else startAsAnswerer();
+
+    // ── Socket listeners for the signaling exchange ──
+    const onOffer = async ({ sdp }) => {
+      await waitForLocalStream();
+      if (cancelled || !streamRef.current) return;
+      const pc = pcRef.current || createPeerConnection();
+      await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+      // Flush any ICE candidates that arrived before remote description was set
+      pendingIceRef.current.forEach(c => pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {}));
+      pendingIceRef.current = [];
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      socket.emit("webrtc:answer", { roomId, sdp: answer });
+    };
+
+    const onAnswer = async ({ sdp }) => {
+      const pc = pcRef.current;
+      if (!pc) return;
+      await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+      pendingIceRef.current.forEach(c => pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {}));
+      pendingIceRef.current = [];
+    };
+
+    const onIce = async ({ candidate }) => {
+      const pc = pcRef.current;
+      if (!pc || !pc.remoteDescription) {
+        // Remote description not set yet — queue it for after setRemoteDescription
+        pendingIceRef.current.push(candidate);
+        return;
+      }
+      try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch {}
+    };
+
+    // BUGFIX: this is the actual "stranger left" handler — the part of
+    // your bug report about not being able to disable/leave the stranger.
+    // Server already emits this on disconnect or explicit match:leave.
+    const onOpponentLeft = () => {
+      setRemoteLeft(true);
+      setRemoteConnected(false);
+      if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
+    };
+
+    socket.on("webrtc:offer",  onOffer);
+    socket.on("webrtc:answer", onAnswer);
+    socket.on("webrtc:ice",    onIce);
+    socket.on("opponent:left", onOpponentLeft);
+
+    return () => {
+      cancelled = true;
+      socket.off("webrtc:offer",  onOffer);
+      socket.off("webrtc:answer", onAnswer);
+      socket.off("webrtc:ice",    onIce);
+      socket.off("opponent:left", onOpponentLeft);
+    };
+  }, [roomId, role]); // eslint-disable-line
 
   /* ─────────────────────────────────────────────
      OVERLAY rAF — draws face landmarks on canvas
@@ -583,6 +787,8 @@ export default function GameScreen({
     setTimer(mode.duration);
     setRound(n);
     setSmileDetected(false);
+    smileStreakRef.current = 0;
+    roundStartTimeRef.current = Date.now(); // BUGFIX: grace period anchor — see smile-debounce note above
     setVoting(false);
     setMyVotePct(0); setOppVotePct(0);
     setMirrorPhase("pose");
@@ -594,7 +800,7 @@ export default function GameScreen({
     // We still start the render loop so face landmarks draw on canvas
     startRenderLoop();
 
-    if (socket && socket.connected) socket.emit("round:start", { round: n, mode: gameMode });
+    if (socket && socket.connected) socket.emit("round:start", { roomId, round: n, mode: gameMode });
 
     clearInterval(timerIvRef.current);
     let t = mode.duration;
@@ -622,7 +828,7 @@ export default function GameScreen({
 
     setMyRoundScores(prev => {
       const next = [...prev, result];
-      socketEmit("round:end", { round: roundRef.current, result });
+      socketEmit("round:end", { roomId, round: roundRef.current, result });
 
       const wins   = next.filter(r=>r==="win").length;
       const losses = next.filter(r=>r==="loss").length;
@@ -637,17 +843,17 @@ export default function GameScreen({
     });
   }
 
-  // smile triggers round end
-  useEffect(() => {
-    if (smileDetected && phaseRef.current === "playing" && gameMode === "dontlaugh") {
-      handleRoundEnd("smiled");
-    }
-  }, [smileDetected]); // eslint-disable-line
+  // BUGFIX: round-end on smile is now triggered directly inside the onResults
+  // callback above (after the consecutive-frame streak check passes). The old
+  // effect here used to fire on the very FIRST smileDetected=true, which
+  // bypassed any debounce and caused the instant false-positive losses.
+  // Removed — handleRoundEnd("smiled") is called once, from one place only.
 
   function endMatch(won) {
     setMatchWon(won);
     setPhase("matchResult");
-    socketEmit("match:end", { won, entryFee, mode: gameMode });
+    socketEmit("match:end", { roomId, won, entryFee, gameMode });
+    if (onMatchEnd) onMatchEnd(won, entryFee);
   }
 
   /* ── Vibe Check / Hot Take — crowd vote ── */
@@ -776,6 +982,56 @@ export default function GameScreen({
             <canvas ref={overlayRef} width={640} height={480}
               style={{ position:"absolute", inset:0, width:"100%", height:"100%", pointerEvents:"none", zIndex:2 }}
             />
+
+            {/*
+              BUGFIX — the stranger's actual video, picture-in-picture corner.
+              This was completely missing before: each player only ever saw
+              their own camera. Now the real remote WebRTC stream renders here.
+              Small + corner-positioned so it doesn't interfere with the
+              full-screen face-tracking game UI, same pattern as real video
+              call apps (Zoom/FaceTime self-view convention, inverted).
+            */}
+            {phase !== "loading" && phase !== "matchResult" && (
+              <div style={{
+                position:"absolute", top:14, right:14, zIndex:6,
+                width:"clamp(80px,22%,120px)", aspectRatio:"3/4",
+                borderRadius:12, overflow:"hidden",
+                border:`2px solid ${remoteConnected ? mode.color+"99" : "rgba(255,77,109,0.5)"}`,
+                background:"#050506",
+                boxShadow:"0 4px 20px rgba(0,0,0,0.5)",
+              }}>
+                <video ref={remoteVideoRef} autoPlay playsInline
+                  style={{ width:"100%", height:"100%", objectFit:"cover", display: remoteConnected ? "block" : "none" }}
+                />
+                {!remoteConnected && !remoteLeft && (
+                  <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:6, background:"rgba(8,8,9,0.9)" }}>
+                    <div style={{ width:18, height:18, borderRadius:"50%", border:"2px solid transparent", borderTopColor:mode.color, animation:"spinRing 0.9s linear infinite" }} />
+                    <div style={{ fontSize:9, color:"#555", fontFamily:"'JetBrains Mono',monospace", textAlign:"center" }}>connecting...</div>
+                  </div>
+                )}
+                {remoteLeft && (
+                  <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:4, background:"rgba(8,8,9,0.95)" }}>
+                    <div style={{ fontSize:16 }}>👋</div>
+                    <div style={{ fontSize:8, color:"#ff4d6d", fontFamily:"'JetBrains Mono',monospace", textAlign:"center", padding:"0 4px" }}>left the call</div>
+                  </div>
+                )}
+                {/* opponent label */}
+                <div style={{ position:"absolute", bottom:0, left:0, right:0, background:"rgba(0,0,0,0.6)", padding:"2px 6px", fontSize:8, fontFamily:"'JetBrains Mono',monospace", color:"#fff", textAlign:"center" }}>
+                  {opponent.name} {opponent.flag}
+                </div>
+              </div>
+            )}
+
+            {/* stranger left the call — full overlay, gives the option to leave too */}
+            {remoteLeft && (
+              <div style={{ position:"absolute", inset:0, zIndex:9, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:16, background:"rgba(8,8,9,0.92)", animation:"fadeIn 0.3s both" }}>
+                <div style={{ fontSize:40 }}>👋</div>
+                <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:24, letterSpacing:2, color:"#ff4d6d" }}>STRANGER LEFT</div>
+                <button onClick={() => { cleanup(); onBack && onBack(); }} style={{ background:`linear-gradient(135deg,${mode.color},#00d4ff)`, color:"#0a0a0a", border:"none", borderRadius:10, padding:"11px 28px", fontFamily:"'Bebas Neue',sans-serif", fontSize:15, letterSpacing:2, cursor:"pointer" }}>
+                  FIND ANOTHER
+                </button>
+              </div>
+            )}
 
             {/* smile border flash */}
             {smileDetected && (
@@ -918,28 +1174,17 @@ export default function GameScreen({
             </div>
           </div>
 
-          {/* crowd */}
-          <div style={{ background:"rgba(255,255,255,0.025)", border:"1px solid rgba(255,255,255,0.06)", borderRadius:14, padding:14, flex:1, position:"relative", overflow:"hidden" }}>
-            <div style={{ fontSize:10, color:"#444", letterSpacing:3, textTransform:"uppercase", marginBottom:10 }}>👀 crowd (84)</div>
-            {[["🧑","alex_k"],["👩","priya_s"],["🐉","dragonz"]].map(([av,n])=>(
-              <div key={n} style={{ display:"flex", alignItems:"center", gap:7, marginBottom:7 }}>
-                <div style={{ width:22, height:22, borderRadius:"50%", background:"rgba(255,255,255,0.05)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:11 }}>{av}</div>
-                <span style={{ fontSize:11, color:"#555" }}>{n}</span>
-              </div>
-            ))}
-            <div style={{ fontSize:10, color:"#2a2a2f", marginBottom:10 }}>+81 more watching</div>
-            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:5 }}>
-              {["😂","🔥","💀","🤣","👏","😮"].map(e=>(
-                <button key={e} onClick={()=>addReaction(e)} style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.06)", borderRadius:7, padding:"7px 0", fontSize:15, cursor:"pointer", transition:"transform 0.15s" }}
-                  onMouseEnter={ev=>ev.currentTarget.style.transform="scale(1.2)"}
-                  onMouseLeave={ev=>ev.currentTarget.style.transform="scale(1)"}
-                >{e}</button>
-              ))}
-            </div>
-            {reactions.map(r=>(
-              <div key={r.id} style={{ position:"absolute", bottom:"18%", left:`${r.x}%`, fontSize:26, animation:"floatUp 2.2s forwards", pointerEvents:"none" }}>{r.emoji}</div>
-            ))}
-          </div>
+          {/*
+            BUGFIX — removed the fake "crowd watching" reaction panel here.
+            This is GameScreen.jsx — the direct 1v1 Play screen between two
+            matched strangers. There is no real crowd in this view; the panel
+            was hardcoded fake spectator names and a fake "84 watching" count,
+            cluttering the sidebar during a private match. Crowd reactions /
+            emoji bar belongs in the separate Watch Live spectator screen,
+            not here. If you want quick reactions between the two players
+            themselves (not a crowd), that's a different, smaller feature —
+            ask for it separately and it can be added back in a minimal form.
+          */}
         </div>
       </div>
 
