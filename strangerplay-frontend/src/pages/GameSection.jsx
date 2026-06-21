@@ -795,6 +795,7 @@ function DontLaugh({ onBack, myPoints = 74 }) {
   const [countdown, setCountdown]   = useState(3);
 
   const videoRef   = useRef(null);
+  const displayRef = useRef(null); // BUGFIX: visible video element, attached via effect not ref-callback
   const overlayRef = useRef(null);
   const modelRef   = useRef(null);
   const streamRef  = useRef(null);
@@ -809,6 +810,27 @@ function DontLaugh({ onBack, myPoints = 74 }) {
 
   useEffect(() => { phaseRef.current = phase; }, [phase]);
 
+  /*
+    BUGFIX — black video / face ring on black background:
+    ROOT CAUSE: the visible <video> previously attached its srcObject
+    via an inline `ref={e => ...}` callback. That callback only fires
+    once, at mount. If the camera stream (set on the hidden bootstrap
+    video below) wasn't ready yet at that exact mount moment, the
+    visible video's srcObject was never set — permanently black —
+    while the canvas overlay kept drawing the face ring every frame
+    (it reads from the hidden video via BlazeFace, which DID have
+    the stream). Landmarks tracked correctly; the video layer stayed
+    empty. This effect re-runs every time `phase` changes (which is
+    when the visible <video> re-mounts/re-renders), so it always
+    re-attaches the live stream — no race.
+  */
+  useEffect(() => {
+    if (displayRef.current && streamRef.current && displayRef.current.srcObject !== streamRef.current) {
+      displayRef.current.srcObject = streamRef.current;
+      displayRef.current.play().catch(() => {});
+    }
+  }, [phase]);
+
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -818,6 +840,8 @@ function DontLaugh({ onBack, myPoints = 74 }) {
         streamRef.current = s;
         videoRef.current.srcObject = s;
         await videoRef.current.play();
+        // BUGFIX: attach immediately too, in case displayRef already exists
+        if (displayRef.current) { displayRef.current.srcObject = s; displayRef.current.play().catch(() => {}); }
       } catch { setLoadMsg("Camera denied. Allow access and refresh."); return; }
       setLoadMsg("Loading face AI...");
       try {
@@ -934,8 +958,7 @@ function DontLaugh({ onBack, myPoints = 74 }) {
       <div style={{ flex:1, display:"flex", gap:12, padding:"clamp(8px,2vw,16px)", minHeight:0 }}>
         <div style={{ flex:1, position:"relative", borderRadius:20, overflow:"hidden", border:"1px solid rgba(255,255,255,0.07)", background:"#090909", minHeight:360 }}>
           {/* Camera feed */}
-          <video autoPlay muted playsInline
-            ref={e => { if (e && videoRef.current?.srcObject && e.srcObject !== videoRef.current.srcObject) { e.srcObject = videoRef.current.srcObject; e.play().catch(()=>{}); } }}
+          <video autoPlay muted playsInline ref={displayRef}
             style={{ width:"100%", height:"100%", objectFit:"cover", transform:"scaleX(-1)", display:phase==="playing"||phase==="countdown"||phase==="roundresult"?"block":"none" }}
           />
           {/* Face ring overlay */}
@@ -1016,6 +1039,7 @@ function VibeCheck({ onBack, myPoints = 74 }) {
   const [countdown, setCountdown] = useState(3);
 
   const videoRef   = useRef(null);
+  const displayRef = useRef(null); // BUGFIX: visible video, attached via effect not race-prone ref-callback
   const streamRef  = useRef(null);
   const timerIvRef = useRef(null);
   const voteIvRef  = useRef(null);
@@ -1024,10 +1048,19 @@ function VibeCheck({ onBack, myPoints = 74 }) {
 
   useEffect(() => {
     (async () => {
-      try { const s=await navigator.mediaDevices.getUserMedia({video:{width:640,height:480,facingMode:"user"},audio:false}); streamRef.current=s; videoRef.current.srcObject=s; await videoRef.current.play(); } catch {}
+      try { const s=await navigator.mediaDevices.getUserMedia({video:{width:640,height:480,facingMode:"user"},audio:false}); streamRef.current=s; videoRef.current.srcObject=s; await videoRef.current.play();
+        if (displayRef.current) { displayRef.current.srcObject = s; displayRef.current.play().catch(()=>{}); } } catch {}
     })();
     return () => { if (streamRef.current) streamRef.current.getTracks().forEach(t=>t.stop()); clearInterval(timerIvRef.current); clearInterval(voteIvRef.current); };
   }, []);
+
+  // BUGFIX: re-attach the stream every time `phase` changes the visible video re-renders/re-mounts
+  useEffect(() => {
+    if (displayRef.current && streamRef.current && displayRef.current.srcObject !== streamRef.current) {
+      displayRef.current.srcObject = streamRef.current;
+      displayRef.current.play().catch(() => {});
+    }
+  }, [phase]);
 
   function startRound(r) {
     setPhase("countdown"); setRound(r);
@@ -1076,8 +1109,7 @@ function VibeCheck({ onBack, myPoints = 74 }) {
       />
       <div style={{ flex:1, display:"flex", gap:12, padding:"clamp(8px,2vw,16px)", minHeight:0 }}>
         <div style={{ flex:1, position:"relative", borderRadius:20, overflow:"hidden", border:"1px solid rgba(255,255,255,0.07)", background:"#090909", minHeight:360, display:"flex", alignItems:"center", justifyContent:"center" }}>
-          <video autoPlay muted playsInline
-            ref={e=>{if(e&&videoRef.current?.srcObject&&e.srcObject!==videoRef.current.srcObject){e.srcObject=videoRef.current.srcObject;e.play().catch(()=>{})}}}
+          <video autoPlay muted playsInline ref={displayRef}
             style={{ position:"absolute", inset:0, width:"100%", height:"100%", objectFit:"cover", transform:"scaleX(-1)", opacity:phase==="playing"||phase==="countdown"||phase==="voting"?0.35:0 }}
           />
           {phase==="ready" && (
@@ -1154,6 +1186,7 @@ function HotTake({ onBack, myPoints = 74 }) {
   const [countdown, setCountdown] = useState(3);
 
   const videoRef   = useRef(null);
+  const displayRef = useRef(null); // BUGFIX: visible video, attached via effect not race-prone ref-callback
   const streamRef  = useRef(null);
   const timerIvRef = useRef(null);
   const voteIvRef  = useRef(null);
@@ -1162,10 +1195,19 @@ function HotTake({ onBack, myPoints = 74 }) {
 
   useEffect(() => {
     (async () => {
-      try { const s=await navigator.mediaDevices.getUserMedia({video:{width:640,height:480,facingMode:"user"},audio:false}); streamRef.current=s; videoRef.current.srcObject=s; await videoRef.current.play(); } catch {}
+      try { const s=await navigator.mediaDevices.getUserMedia({video:{width:640,height:480,facingMode:"user"},audio:false}); streamRef.current=s; videoRef.current.srcObject=s; await videoRef.current.play();
+        if (displayRef.current) { displayRef.current.srcObject = s; displayRef.current.play().catch(()=>{}); } } catch {}
     })();
     return () => { if(streamRef.current) streamRef.current.getTracks().forEach(t=>t.stop()); clearInterval(timerIvRef.current); clearInterval(voteIvRef.current); };
   }, []);
+
+  // BUGFIX: re-attach stream whenever phase changes triggers a re-mount of the visible video
+  useEffect(() => {
+    if (displayRef.current && streamRef.current && displayRef.current.srcObject !== streamRef.current) {
+      displayRef.current.srcObject = streamRef.current;
+      displayRef.current.play().catch(() => {});
+    }
+  }, [phase]);
 
   function startRound(r) {
     setPhase("countdown"); setRound(r); setPrompt(pick(HOT_TAKE_PROMPTS));
@@ -1207,7 +1249,7 @@ function HotTake({ onBack, myPoints = 74 }) {
       />
       <div style={{ flex:1, display:"flex", gap:12, padding:"clamp(8px,2vw,16px)", minHeight:0 }}>
         <div style={{ flex:1, position:"relative", borderRadius:20, overflow:"hidden", border:"1px solid rgba(255,255,255,0.07)", background:"#090909", minHeight:360, display:"flex", alignItems:"center", justifyContent:"center" }}>
-          <video autoPlay muted playsInline ref={e=>{if(e&&videoRef.current?.srcObject&&e.srcObject!==videoRef.current.srcObject){e.srcObject=videoRef.current.srcObject;e.play().catch(()=>{})}}}
+          <video autoPlay muted playsInline ref={displayRef}
             style={{ position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover",transform:"scaleX(-1)",opacity:phase==="playing"||phase==="countdown"||phase==="voting"?0.3:0 }}/>
 
           {phase==="ready"&&(
@@ -1284,6 +1326,7 @@ function MirrorMe({ onBack, myPoints = 74 }) {
   const [countdown, setCountdown]   = useState(3);
 
   const videoRef   = useRef(null);
+  const displayRef = useRef(null); // BUGFIX: visible video, attached via effect not race-prone ref-callback
   const streamRef  = useRef(null);
   const timerIvRef = useRef(null);
   const subRef     = useRef("pose");
@@ -1292,10 +1335,19 @@ function MirrorMe({ onBack, myPoints = 74 }) {
 
   useEffect(() => {
     (async () => {
-      try { const s=await navigator.mediaDevices.getUserMedia({video:{width:640,height:480,facingMode:"user"},audio:false}); streamRef.current=s; videoRef.current.srcObject=s; await videoRef.current.play(); } catch {}
+      try { const s=await navigator.mediaDevices.getUserMedia({video:{width:640,height:480,facingMode:"user"},audio:false}); streamRef.current=s; videoRef.current.srcObject=s; await videoRef.current.play();
+        if (displayRef.current) { displayRef.current.srcObject = s; displayRef.current.play().catch(()=>{}); } } catch {}
     })();
     return () => { if(streamRef.current) streamRef.current.getTracks().forEach(t=>t.stop()); clearInterval(timerIvRef.current); };
   }, []);
+
+  // BUGFIX: re-attach stream whenever phase changes triggers a re-mount of the visible video
+  useEffect(() => {
+    if (displayRef.current && streamRef.current && displayRef.current.srcObject !== streamRef.current) {
+      displayRef.current.srcObject = streamRef.current;
+      displayRef.current.play().catch(() => {});
+    }
+  }, [phase]);
 
   function startRound(r) {
     setPhase("countdown"); setRound(r); setPose(pick(MIRROR_ME_POSES));
@@ -1336,7 +1388,7 @@ function MirrorMe({ onBack, myPoints = 74 }) {
       />
       <div style={{ flex:1, display:"flex", gap:12, padding:"clamp(8px,2vw,16px)", minHeight:0 }}>
         <div style={{ flex:1, position:"relative", borderRadius:20, overflow:"hidden", border:"1px solid rgba(255,255,255,0.07)", background:"#090909", minHeight:360, display:"flex", alignItems:"center", justifyContent:"center" }}>
-          <video autoPlay muted playsInline ref={e=>{if(e&&videoRef.current?.srcObject&&e.srcObject!==videoRef.current.srcObject){e.srcObject=videoRef.current.srcObject;e.play().catch(()=>{})}}}
+          <video autoPlay muted playsInline ref={displayRef}
             style={{ position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover",transform:"scaleX(-1)",opacity:phase==="playing"||phase==="countdown"?0.5:0 }}/>
 
           {phase==="ready"&&(

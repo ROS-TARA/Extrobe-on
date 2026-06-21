@@ -345,6 +345,30 @@ export default function GameScreen({
   useEffect(() => { phaseRef.current = phase; }, [phase]);
   useEffect(() => { roundRef.current = round; }, [round]);
 
+  /*
+    BUGFIX — black camera feed right after matchmaking connects:
+    ROOT CAUSE: the visible self-cam <video ref={videoShowRef}> only
+    exists in the DOM once `phase !== "loading"` (see render below).
+    But the original camera-attach code ran getUserMedia() and tried
+    to attach the stream to videoShowRef BEFORE that — while phase
+    was still "loading" (MediaPipe scripts were still downloading
+    from CDN, which takes 1-2+ seconds). At that moment
+    videoShowRef.current was null, the attach was skipped, and
+    nothing ever retried it. The hidden bootstrap <video ref={videoRef}>
+    DID get the stream (MediaPipe reads from it via the Camera utility),
+    so face landmarks tracked perfectly — but the visible camera box
+    stayed permanently black underneath them.
+    FIX: this effect re-runs every time `phase` changes — which is
+    exactly when videoShowRef mounts into the DOM — and re-attaches
+    the live stream if it's missing. Self-healing, no race.
+  */
+  useEffect(() => {
+    if (videoShowRef.current && streamRef.current && videoShowRef.current.srcObject !== streamRef.current) {
+      videoShowRef.current.srcObject = streamRef.current;
+      videoShowRef.current.play().catch(() => {});
+    }
+  }, [phase]);
+
   /* ─────────────────────────────────────────────
      MEDIAPIPE SETUP
      
