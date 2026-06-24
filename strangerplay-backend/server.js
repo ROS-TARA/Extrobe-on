@@ -620,7 +620,7 @@ io.on("connection", (socket) => {
        4. Emit "match:found" to both with room info
        5. Player1 (offerer) creates RTCPeerConnection and sends offer
   */
-  socket.on("queue:join", async ({ gameMode = "dontlaugh" } = {}) => {
+  socket.on("queue:join", async ({ gameMode = null } = {}) => {
     // Remove any existing entry for this socket (prevent double-queueing)
     const existing = queue.findIndex(p => p.socketId === socket.id);
     if (existing !== -1) queue.splice(existing, 1);
@@ -631,17 +631,18 @@ io.on("connection", (socket) => {
       username:  socket.username || `anon_${socket.id.slice(0,6)}`,
       flag:      socket.userFlag || "🌍",
       points:    socket.userPoints || 0,
-      gameMode,
+      gameMode,  // null — game is chosen AFTER connecting, not before
     });
 
     socket.emit("queue:waiting", { position: queue.length });
-    console.log(`📋 queue: ${queue.length} waiting (${gameMode})`);
+    console.log(`📋 queue: ${queue.length} waiting`);
 
-    // Try to pair — find another player wanting the same game mode
-    // OR fall back to any mode if waiting > 10s (handled client side with timeout)
-    const idx = queue.findIndex(
-      p => p.socketId !== socket.id && p.gameMode === gameMode
-    );
+    // Match ANY two waiting players — purely on availability.
+    // Game mode is null until both strangers agree on one in the call.
+    // Old behavior (match by gameMode) meant null never matched null because
+    // the server required gameMode equality — and "dontlaugh" default meant
+    // users were dropped straight into Don't Laugh before saying hi.
+    const idx = queue.findIndex(p => p.socketId !== socket.id);
 
     if (idx !== -1) {
       const p2 = queue.splice(idx, 1)[0];

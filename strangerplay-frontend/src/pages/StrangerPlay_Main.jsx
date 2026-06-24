@@ -454,15 +454,62 @@ function LBRow({ rank, name, flag, pts, wins, isMe, delay }) {
    WEBRTC HOOK — unchanged logic, cleaner
 ────────────────────────────────────────── */
 function useWebRTC() {
-  const localRef = useRef(null);
-  const [stream, setStream] = useState(null);
-  const [camErr, setCamErr] = useState(null);
-  const [muted, setMuted] = useState(false);
-  const [camOff, setCamOff] = useState(false);
+  const localRef  = useRef(null);
+  const remoteRef = useRef(null);   // stranger's video — attached by setupPeerConnection
+  const pcRef     = useRef(null);   // RTCPeerConnection instance
+  const pendingICE = useRef([]);    // ICE candidates queued before remote description is set
+
+  const [stream,         setStream]         = useState(null);
+  const [remoteStream,   setRemoteStream]   = useState(null);
+  const [remoteConnected,setRemoteConnected]= useState(false);
+  const [camErr,  setCamErr]  = useState(null);
+  const [muted,   setMuted]   = useState(false);
+  const [camOff,  setCamOff]  = useState(false);
+
+  /*
+    ICE servers — why both STUN and TURN:
+    STUN: helps peers discover their public IP. Works when both are behind
+    simple NAT (most home routers). Free, no relay, low latency.
+    TURN: a relay server that proxies video when direct connection fails.
+    Required for ~30% of real connections: carrier-grade NAT (mobile),
+    corporate firewalls, and cross-country calls (Nepal ↔ Japan will often
+    hit this). metered.ca provides a free TURN tier — 500 MB/month, enough
+    for dev/testing without any sign-up or credit card.
+    
+    To get your own free credentials:
+      1. Go to https://www.metered.ca/tools/openrelay/
+      2. Copy the username/credential shown on the page
+      3. Replace the values below
+    The credentials below are from the OpenRelay public demo — they work
+    but have shared bandwidth limits. Fine for testing with your brother.
+  */
+  const ICE_SERVERS = [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" },
+    // Free TURN relay — needed for cross-country/mobile connections
+    {
+      urls:       "turn:openrelay.metered.ca:80",
+      username:   "openrelayproject",
+      credential: "openrelayproject",
+    },
+    {
+      urls:       "turn:openrelay.metered.ca:443",
+      username:   "openrelayproject",
+      credential: "openrelayproject",
+    },
+    {
+      urls:       "turn:openrelay.metered.ca:443?transport=tcp",
+      username:   "openrelayproject",
+      credential: "openrelayproject",
+    },
+  ];
 
   async function startCamera() {
     try {
-      const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: true });
+      const s = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" },
+        audio: true,
+      });
       setStream(s);
       if (localRef.current) { localRef.current.srcObject = s; localRef.current.play().catch(() => {}); }
       setCamErr(null);
@@ -475,6 +522,7 @@ function useWebRTC() {
 
   function stopCamera() {
     if (stream) { stream.getTracks().forEach(t => t.stop()); setStream(null); }
+    closePeer();
   }
 
   function toggleMute() {
@@ -489,11 +537,112 @@ function useWebRTC() {
     setCamOff(c => !c);
   }
 
+  // Call this once match:found fires — creates the RTCPeerConnection,
+  // wires socket signaling events, and initiates or receives the offer.
+  function setupPeerConnection(roomId, role, streamRef) {
+    closePeer(); // clean up any old connection first
+
+    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    pcRef.current = pc;
+    pendingICE.current = [];
+
+    // Add our local tracks so the other side can receive our camera/mic
+    const localStream = streamRef || stream;
+    if (localStream) {
+      localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+    }
+
+    // When the remote peer's tracks arrive — render them
+    pc.ontrack = (event) => {
+      const [rs] = event.streams;
+      setRemoteStream(rs);
+      if (remoteRef.current) {
+        remoteRef.current.srcObject = rs;
+        remoteRef.current.play().catch(() => {});
+      }
+      setRemoteConnected(true);
+    };
+
+    // Send our ICE candidates to the other peer via the server
+    pc.onicecandidate = ({ candidate }) => {
+      if (candidate) socket.emit("webrtc:ice", { roomId, candidate });
+    };
+
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === "connected")   setRemoteConnected(true);
+      if (pc.connectionState === "disconnected" || pc.connectionState === "failed") {
+        setRemoteConnected(false);
+      }
+    };
+
+    // Set up socket listeners for this match
+    async function onOffer({ sdp }) {
+      await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+      // Flush ICE candidates that arrived before remote description was set
+      for (const c of pendingICE.current) {
+        await pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {});
+      }
+      pendingICE.current = [];
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      socket.emit("webrtc:answer", { roomId, sdp: answer });
+    }
+
+    async function onAnswer({ sdp }) {
+      await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+      for (const c of pendingICE.current) {
+        await pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {});
+      }
+      pendingICE.current = [];
+    }
+
+    async function onIce({ candidate }) {
+      if (!pc.remoteDescription) {
+        // Queue it — remote description not set yet
+        pendingICE.current.push(candidate);
+        return;
+      }
+      await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => {});
+    }
+
+    socket.on("webrtc:offer",  onOffer);
+    socket.on("webrtc:answer", onAnswer);
+    socket.on("webrtc:ice",    onIce);
+
+    // Offerer creates and sends the offer immediately
+    if (role === "offer") {
+      pc.createOffer()
+        .then(offer => pc.setLocalDescription(offer))
+        .then(() => socket.emit("webrtc:offer", { roomId, sdp: pc.localDescription }))
+        .catch(e => console.error("createOffer failed:", e));
+    }
+
+    // Return cleanup fn
+    return () => {
+      socket.off("webrtc:offer",  onOffer);
+      socket.off("webrtc:answer", onAnswer);
+      socket.off("webrtc:ice",    onIce);
+    };
+  }
+
+  function closePeer() {
+    if (pcRef.current) { pcRef.current.close(); pcRef.current = null; }
+    setRemoteConnected(false);
+    setRemoteStream(null);
+    pendingICE.current = [];
+  }
+
   useEffect(() => {
     if (stream && localRef.current) { localRef.current.srcObject = stream; localRef.current.play().catch(() => {}); }
   }, [stream]);
 
-  return { localRef, stream, camErr, muted, camOff, startCamera, stopCamera, toggleMute, toggleCam };
+  return {
+    localRef, remoteRef,
+    stream, remoteStream, remoteConnected,
+    camErr, muted, camOff,
+    startCamera, stopCamera, toggleMute, toggleCam,
+    setupPeerConnection, closePeer,
+  };
 }
 
 /* ──────────────────────────────────────────
@@ -868,7 +1017,11 @@ export default function StrangerPlay() {
   const [matchInfo, setMatchInfo] = useState(null);
   const [selectedGame, setSelectedGame] = useState("dontlaugh");
   const [queueTime, setQueueTime] = useState(0);
-  const queueTimerRef = useRef(null);
+  const [opponentLeft, setOpponentLeft] = useState(false);
+  const [proposedGame, setProposedGame] = useState(null);   // game the OTHER side proposed
+  const [gameAccepted, setGameAccepted]  = useState(false); // both accepted → open GameScreen
+  const queueTimerRef  = useRef(null);
+  const peerCleanupRef = useRef(null);  // stores the cleanup fn returned by setupPeerConnection
 
   /* ── SOCKET ── */
   useEffect(() => {
@@ -889,6 +1042,34 @@ export default function StrangerPlay() {
       clearInterval(queueTimerRef.current);
       setMatchInfo(info);
       setMatchPhase("connected");
+      setOpponentLeft(false);
+      setProposedGame(null);
+      setGameAccepted(false);
+      // Don't jump straight to GameScreen — show the call UI first.
+      // Users talk, then CHOOSE a game together. GameScreen only opens when both accept.
+      setPage("play");
+      // Start the actual WebRTC peer connection now that we have roomId + role
+      if (peerCleanupRef.current) peerCleanupRef.current();
+      // Small delay to let state settle and camera stream be ready
+      setTimeout(() => {
+        peerCleanupRef.current = webrtc.setupPeerConnection(info.roomId, info.role);
+      }, 200);
+    });
+
+    socket.on("opponent:left", () => {
+      setOpponentLeft(true);
+      webrtc.closePeer();
+    });
+
+    // Other player proposed a game — show "wants to play X" toast
+    socket.on("gameProposed", ({ game }) => {
+      setProposedGame(game);
+    });
+
+    // Both accepted — now launch GameScreen
+    socket.on("gameStarted", ({ game }) => {
+      setMatchInfo(prev => prev ? { ...prev, gameMode: game } : prev);
+      setGameAccepted(true);
       setPage("gamescreen");
     });
 
@@ -900,6 +1081,9 @@ export default function StrangerPlay() {
       socket.off("queue:waiting");
       socket.off("match:found");
       socket.off("auth:error");
+      socket.off("opponent:left");
+      socket.off("gameProposed");
+      socket.off("gameStarted");
     };
   }, []);
 
@@ -1307,12 +1491,12 @@ export default function StrangerPlay() {
       )}
 
       {/* ══════════════════════════════
-          PLAY — matchmaking lobby
+          PLAY — matchmaking lobby + live call
       ══════════════════════════════ */}
       {page === "play" && (
         <div style={{ position: "relative", zIndex: 1, paddingTop: 60, minHeight: "100vh" }}>
 
-          {/* IDLE — camera only, no game forced yet */}
+          {/* ── IDLE — camera preview + find button ── */}
           {matchPhase === "idle" && (
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "calc(100vh - 60px)", gap: 28, padding: "40px 20px" }}>
               <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: DS.ash, letterSpacing: 4 }}>// say hi first</div>
@@ -1323,31 +1507,15 @@ export default function StrangerPlay() {
                 You'll connect first. Pick a game together once you're talking — or don't, and just talk.
               </p>
 
-              {/* Camera preview — different shape per platform */}
               {webrtc.stream && (
                 <>
-                  {/* Desktop: small landscape pill */}
-                  <div className="hide-mobile" style={{
-                    width: 260, aspectRatio: "4/3",
-                    borderRadius: 14, overflow: "hidden",
-                    border: `1px solid ${DS.signal}44`,
-                    background: DS.surface2,
-                    position: "relative",
-                  }}>
+                  <div className="hide-mobile" style={{ width: 260, aspectRatio: "4/3", borderRadius: 14, overflow: "hidden", border: `1px solid ${DS.signal}44`, background: DS.surface2, position: "relative" }}>
                     <video ref={webrtc.localRef} autoPlay muted playsInline style={{ width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)" }} />
                     <div style={{ position: "absolute", bottom: 8, left: 8 }}>
                       <span className="sp-live-badge"><span className="sp-live-dot" />PREVIEW</span>
                     </div>
                   </div>
-
-                  {/* Mobile: tall portrait — TikTok-style */}
-                  <div className="show-mobile" style={{
-                    width: "min(160px, 50vw)", aspectRatio: "9/16",
-                    borderRadius: 16, overflow: "hidden",
-                    border: `1px solid ${DS.signal}44`,
-                    background: DS.surface2,
-                    position: "relative",
-                  }}>
+                  <div className="show-mobile" style={{ width: "min(160px, 50vw)", aspectRatio: "9/16", borderRadius: 16, overflow: "hidden", border: `1px solid ${DS.signal}44`, background: DS.surface2, position: "relative" }}>
                     <video ref={webrtc.localRef} autoPlay muted playsInline style={{ width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)" }} />
                     <div style={{ position: "absolute", bottom: 8, left: 8 }}>
                       <span className="sp-live-badge" style={{ fontSize: 9 }}><span className="sp-live-dot" />YOU</span>
@@ -1359,7 +1527,6 @@ export default function StrangerPlay() {
                 <div style={{ background: DS.live + "10", border: `1px solid ${DS.live}33`, borderRadius: 10, padding: "10px 16px", fontSize: 12, color: DS.live, maxWidth: 300, textAlign: "center" }}>{webrtc.camErr}</div>
               )}
 
-              {/* Find button */}
               <button
                 onClick={() => startSearch(null)}
                 style={{
@@ -1385,7 +1552,7 @@ export default function StrangerPlay() {
             </div>
           )}
 
-          {/* SEARCHING */}
+          {/* ── SEARCHING ── */}
           {matchPhase === "searching" && (
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "calc(100vh - 60px)", gap: 24, padding: "40px 20px" }}>
               <div style={{ position: "relative", width: 160, height: 160 }}>
@@ -1400,16 +1567,235 @@ export default function StrangerPlay() {
                 Finding your <Signal>match</Signal>
               </h2>
               <p style={{ color: DS.ash, fontFamily: "'JetBrains Mono', monospace", fontSize: 12, textAlign: "center", lineHeight: 1.8 }}>
-                scanning {liveCount.toLocaleString()} players for {selectedGame}...<br />
+                scanning {liveCount.toLocaleString()} players...<br />
                 <span style={{ color: DS.ghost, fontSize: 11 }}>game starts the instant someone joins</span>
               </p>
-              <div style={{ display: "flex", alignItems: "center", gap: 7, fontFamily: "'JetBrains Mono', monospace", fontSize: 11 }}>
-                <div style={{ width: 6, height: 6, borderRadius: "50%", background: liveCount > 0 ? DS.signal : DS.live, boxShadow: `0 0 8px ${liveCount > 0 ? DS.signal : DS.live}` }} />
-                <span style={{ color: liveCount > 0 ? DS.signal : DS.live }}>
-                  {liveCount > 0 ? "server connected" : "server connecting..."}
-                </span>
-              </div>
               <button className="sp-btn-ghost" style={{ padding: "10px 28px" }} onClick={cancelSearch}>Cancel</button>
+            </div>
+          )}
+
+          {/* ── CONNECTED — full screen Omegle-style call UI ── */}
+          {matchPhase === "connected" && matchInfo && (
+            <div style={{
+              position: "fixed", inset: 0, top: 60,
+              background: "#000",
+              display: "flex", flexDirection: "column",
+              zIndex: 10,
+            }}>
+              {/*
+                Two-camera layout — Omegle/OmeTV style but premium:
+                Stranger = full screen background
+                You = small corner PiP (picture-in-picture)
+                This is the standard pro call app layout — FaceTime, OmeTV, Chatroulette all do this.
+                Full screen = the stranger feels real and present.
+                Tiny PiP = you can check yourself without it dominating.
+              */}
+
+              {/* STRANGER — full screen background */}
+              <div style={{ position: "absolute", inset: 0 }}>
+                {webrtc.remoteConnected ? (
+                  <video
+                    ref={webrtc.remoteRef}
+                    autoPlay
+                    playsInline
+                    style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                  />
+                ) : (
+                  <div style={{ width: "100%", height: "100%", background: DS.surface, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16 }}>
+                    <div style={{ width: 48, height: 48, borderRadius: "50%", border: `2px solid transparent`, borderTopColor: DS.signal, animation: "sp-spin 1s linear infinite" }} />
+                    <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: DS.ash, letterSpacing: 2 }}>
+                      {opponentLeft ? "STRANGER LEFT" : "CONNECTING..."}
+                    </div>
+                    {!opponentLeft && (
+                      <div style={{ fontSize: 11, color: DS.ghost, maxWidth: 220, textAlign: "center", lineHeight: 1.6 }}>
+                        Establishing peer connection.<br />This can take up to 10s on mobile.
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Stranger's name tag — bottom left */}
+                {webrtc.remoteConnected && (
+                  <div style={{ position: "absolute", bottom: 90, left: 20, display: "flex", alignItems: "center", gap: 8 }}>
+                    <div style={{ background: "rgba(0,0,0,0.65)", backdropFilter: "blur(8px)", borderRadius: 10, padding: "6px 12px", display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ fontSize: 16 }}>{matchInfo.opponent?.flag || "🌍"}</span>
+                      <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "#fff" }}>
+                        {matchInfo.opponent?.username || "stranger"}
+                      </span>
+                      <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#4ade80", boxShadow: "0 0 8px #4ade80" }} />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* YOU — corner PiP */}
+              <div style={{
+                position: "absolute",
+                top: 16, right: 16,
+                // Portrait on mobile (TikTok-style), landscape on desktop
+                width: "clamp(80px, 22vw, 130px)",
+                aspectRatio: window.innerWidth < 600 ? "9/16" : "4/3",
+                borderRadius: 12,
+                overflow: "hidden",
+                border: `2px solid rgba(255,255,255,0.2)`,
+                background: DS.surface2,
+                boxShadow: "0 4px 24px rgba(0,0,0,0.6)",
+                zIndex: 20,
+              }}>
+                <video
+                  ref={webrtc.localRef}
+                  autoPlay muted playsInline
+                  style={{ width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)" }}
+                />
+                <div style={{ position: "absolute", bottom: 4, left: 4 }}>
+                  <span className="sp-live-badge" style={{ fontSize: 8, padding: "2px 6px" }}>
+                    <span className="sp-live-dot" />YOU
+                  </span>
+                </div>
+              </div>
+
+              {/* GAME PROPOSAL TOAST — appears when the other person wants to play */}
+              {proposedGame && !gameAccepted && (
+                <div style={{
+                  position: "absolute", top: 80, left: "50%", transform: "translateX(-50%)",
+                  background: "rgba(0,0,0,0.85)", backdropFilter: "blur(16px)",
+                  border: `1px solid ${DS.signal}55`,
+                  borderRadius: 14, padding: "14px 20px",
+                  display: "flex", flexDirection: "column", alignItems: "center", gap: 10,
+                  zIndex: 30, animation: "sp-fadeup 0.3s both",
+                  minWidth: 220, textAlign: "center",
+                }}>
+                  <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: DS.ash, letterSpacing: 2 }}>WANTS TO PLAY</div>
+                  <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 18, color: DS.signal }}>
+                    {proposedGame.replace(/_/g," ").toUpperCase()}
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                      onClick={() => {
+                        socket.emit("acceptGame", { roomId: matchInfo.roomId, game: proposedGame });
+                        setProposedGame(null);
+                      }}
+                      style={{ background: DS.signal, color: DS.void, border: "none", borderRadius: 8, padding: "8px 18px", fontFamily: "'JetBrains Mono', monospace", fontSize: 12, fontWeight: 700, cursor: "pointer" }}
+                    >
+                      ACCEPT
+                    </button>
+                    <button
+                      onClick={() => setProposedGame(null)}
+                      style={{ background: "transparent", color: DS.ash, border: `1px solid ${DS.rim}`, borderRadius: 8, padding: "8px 14px", fontSize: 12, cursor: "pointer" }}
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* CONTROLS BAR — bottom */}
+              <div style={{
+                position: "absolute", bottom: 0, left: 0, right: 0,
+                padding: "16px 20px max(20px, env(safe-area-inset-bottom))",
+                background: "linear-gradient(to top, rgba(0,0,0,0.9) 0%, transparent 100%)",
+                display: "flex", alignItems: "flex-end", gap: 12,
+                zIndex: 20,
+              }}>
+                {/* Game picker — left side */}
+                <div style={{ flex: 1, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                  {[
+                    { id: "dontlaugh",    label: "😐 Don't Laugh" },
+                    { id: "vibecheck",    label: "🎭 Vibe Check" },
+                    { id: "mirrorme",     label: "🪞 Mirror Me" },
+                    { id: "hottake",      label: "🌶️ Hot Take" },
+                    { id: "echo",         label: "🔊 Echo" },
+                    { id: "finishmystory",label: "📖 Story" },
+                  ].map(g => (
+                    <button
+                      key={g.id}
+                      onClick={() => {
+                        socket.emit("proposeGame", { roomId: matchInfo.roomId, game: g.id });
+                      }}
+                      style={{
+                        background: "rgba(255,255,255,0.08)",
+                        backdropFilter: "blur(8px)",
+                        border: `1px solid rgba(255,255,255,0.15)`,
+                        borderRadius: 20,
+                        padding: "6px 12px",
+                        color: "#fff",
+                        fontSize: 11,
+                        fontFamily: "'JetBrains Mono', monospace",
+                        cursor: "pointer",
+                        whiteSpace: "nowrap",
+                        transition: "all 0.15s",
+                      }}
+                    >
+                      {g.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Right controls */}
+                <div style={{ display: "flex", gap: 10, flexShrink: 0 }}>
+                  <button
+                    onClick={webrtc.toggleMute}
+                    style={{
+                      width: 48, height: 48, borderRadius: "50%",
+                      background: webrtc.muted ? DS.live : "rgba(255,255,255,0.12)",
+                      backdropFilter: "blur(8px)",
+                      border: "none", cursor: "pointer", fontSize: 18,
+                    }}
+                  >
+                    {webrtc.muted ? "🔇" : "🎤"}
+                  </button>
+                  <button
+                    onClick={webrtc.toggleCam}
+                    style={{
+                      width: 48, height: 48, borderRadius: "50%",
+                      background: webrtc.camOff ? DS.live : "rgba(255,255,255,0.12)",
+                      backdropFilter: "blur(8px)",
+                      border: "none", cursor: "pointer", fontSize: 18,
+                    }}
+                  >
+                    {webrtc.camOff ? "🚫" : "📷"}
+                  </button>
+                  <button
+                    onClick={() => {
+                      socket.emit("match:leave", { roomId: matchInfo.roomId });
+                      webrtc.closePeer();
+                      setMatchPhase("idle");
+                      setMatchInfo(null);
+                      setOpponentLeft(false);
+                    }}
+                    style={{
+                      width: 48, height: 48, borderRadius: "50%",
+                      background: DS.live,
+                      border: "none", cursor: "pointer", fontSize: 18,
+                      boxShadow: `0 0 20px ${DS.live}55`,
+                    }}
+                  >
+                    📞
+                  </button>
+                </div>
+              </div>
+
+              {/* Opponent left overlay */}
+              {opponentLeft && (
+                <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.85)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 20, zIndex: 40 }}>
+                  <div style={{ fontSize: 56 }}>👋</div>
+                  <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 28, color: DS.live }}>Stranger left</div>
+                  <div style={{ display: "flex", gap: 12 }}>
+                    <button
+                      onClick={() => { startSearch(null); }}
+                      style={{ background: DS.signal, color: DS.void, border: "none", borderRadius: 12, padding: "12px 28px", fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 16, cursor: "pointer" }}
+                    >
+                      Find another
+                    </button>
+                    <button
+                      onClick={() => { setMatchPhase("idle"); setMatchInfo(null); setOpponentLeft(false); }}
+                      style={{ background: "transparent", color: DS.ash, border: `1px solid ${DS.rim}`, borderRadius: 12, padding: "12px 20px", fontSize: 14, cursor: "pointer" }}
+                    >
+                      Go home
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -1463,10 +1849,10 @@ export default function StrangerPlay() {
       {page === "settings" && <Settings onNavigate={goTo} user={user} onUserUpdate={handleLogin} />}
       {page === "games"    && <GameSection onBack={() => goTo("home")} myPoints={points} />}
 
-      {/* GameScreen — only renders on real match */}
-      {page === "gamescreen" && matchPhase === "connected" && matchInfo ? (
+      {/* GameScreen — only renders after BOTH players accepted a game */}
+      {page === "gamescreen" && gameAccepted && matchInfo ? (
         <GameScreen
-          gameMode={matchInfo.gameMode}
+          gameMode={matchInfo.gameMode || "dontlaugh"}
           roomId={matchInfo.roomId}
           role={matchInfo.role}
           opponent={matchInfo.opponent}
@@ -1474,7 +1860,7 @@ export default function StrangerPlay() {
           myPoints={points}
           myUsername={user?.username || "anon"}
           myFlag={user?.flag || "🌍"}
-          onBack={() => { setMatchPhase("idle"); setMatchInfo(null); goTo("play"); }}
+          onBack={() => { setMatchPhase("idle"); setMatchInfo(null); setGameAccepted(false); goTo("play"); }}
           onMatchEnd={(won, fee) => {
             const delta = won ? fee : -fee;
             const newPts = Math.max(0, points + delta);
@@ -1483,6 +1869,7 @@ export default function StrangerPlay() {
             localStorage.setItem("sp_user", JSON.stringify({ ...saved, points: newPts }));
             setMatchPhase("idle");
             setMatchInfo(null);
+            setGameAccepted(false);
           }}
         />
       ) : page === "gamescreen" ? (
