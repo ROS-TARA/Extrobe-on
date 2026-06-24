@@ -69,6 +69,10 @@ const CDN_DRAWING  = "https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/draw
    GAME MODE CONFIG
 ───────────────────────────────────────────── */
 const MODES = {
+  floppy: {
+    label: "Floppy Head", emoji: "🐤", color: "#47c4ff", duration: 9999, // ends on crash, not a clock
+    desc: "Move your head up and down — the bird follows your head's Y position directly. No gravity, no flapping. Dodge the gaps.",
+  },
   dontlaugh: {
     label: "Don't Laugh", emoji: "😐", color: "#00f5a0", duration: 20,
     desc: "Keep a straight face. Smile = you lose the round.",
@@ -288,7 +292,10 @@ function VoteBar({ label, pct, color, isMe }) {
    MAIN COMPONENT
 ───────────────────────────────────────────── */
 export default function GameScreen({
-  gameMode  = "dontlaugh",
+  gameMode: initialGameMode = null,   // BUGFIX: was defaulting to "dontlaugh" — every single
+                                       // match silently started Don't Laugh no matter what was
+                                       // tapped, because this default fired before any real
+                                       // choice ever arrived. null now means "no game yet."
   roomId    = null,
   role      = "offer",   // "offer" = caller, "answer" = callee — set by server on match:found
   opponent  = { name: "stranger_7829", flag: "🇧🇷", avatar: "🧑", pts: 3200 },
@@ -297,7 +304,47 @@ export default function GameScreen({
   onBack,
   onMatchEnd,
 }) {
-  const mode = MODES[gameMode] || MODES.dontlaugh;
+  // The REAL game choice now comes from the server's "gameStarted" event,
+  // fired only after both players accept a proposal (see socket effect below).
+  const [gameMode, setGameMode] = useState(initialGameMode);
+  const [proposedGame, setProposedGame] = useState(null); // what the OTHER player just proposed, waiting on us
+  const mode = gameMode ? (MODES[gameMode] || MODES.dontlaugh) : { label: "", duration: 9999 };
+
+  // Listen for the propose/accept handshake. This is what actually starts
+  // a game now — tapping an icon no longer jumps straight into play.
+  useEffect(() => {
+    function onProposed({ game, proposedBy }) {
+      if (proposedBy !== socket.id) setProposedGame(game); // only show the prompt to the OTHER player
+    }
+    function onStarted({ game }) {
+      setProposedGame(null);
+      setGameMode(game);
+    }
+    function onRejected({ reason }) {
+      setProposedGame(null);
+      alert(`Couldn't start that game: ${reason}`); // e.g. "not enough coins"
+    }
+    socket.on("gameProposed", onProposed);
+    socket.on("gameStarted", onStarted);
+    socket.on("gameRejected", onRejected);
+    return () => {
+      socket.off("gameProposed", onProposed);
+      socket.off("gameStarted", onStarted);
+      socket.off("gameRejected", onRejected);
+    };
+  }, []);
+
+  const proposeGame = (game) => socket.emit("proposeGame", { roomId, game });
+  const acceptGame   = (game) => socket.emit("acceptGame", { roomId, game });
+
+  // Once gameStarted sets a real gameMode while we're sitting in the picker,
+  // actually transition into the game — same intro beat as the initial load.
+  useEffect(() => {
+    if (gameMode && phaseRef.current === "choosing") {
+      setPhase("intro");
+      setTimeout(() => startRound(1), INTRO_DURATION);
+    }
+  }, [gameMode]);
 
   /* ── STATE ── */
   const [phase,          setPhase]         = useState("loading");
@@ -317,6 +364,7 @@ export default function GameScreen({
   const [reactions,      setReactions]     = useState([]);
   const [myScore,        setMyScore]       = useState(0);
   const [oppScore,       setOppScore]      = useState(0);
+  const [floppyLiveScore, setFloppyLiveScore] = useState(0); // pipes passed this round — separate from myScore (round-win tally)
 
   /* ── REFS ── */
   const videoRef      = useRef(null);   // hidden video — MediaPipe reads this
@@ -331,6 +379,13 @@ export default function GameScreen({
   const phaseRef      = useRef("loading");
   const roundRef      = useRef(1);
   const poseLMRef     = useRef(null);   // stored pose for Mirror Me
+  const floppy = useRef({
+    birdY: 0.5,        // 0-1 normalized, where the bird currently is
+    gaps: [],          // [{x, gapTop, gapH, passed}] — x in pixels, scrolls left
+    score: 0,
+    lastSpawn: 0,
+    crashed: false,
+  });
 
   const [remoteConnected, setRemoteConnected] = useState(false);
   const [remoteLeft,       setRemoteLeft]      = useState(false);
@@ -520,7 +575,12 @@ export default function GameScreen({
 
       setLoadStatus("Ready.");
       setPhase("intro");
-      setTimeout(() => { if (mounted) { startRenderLoop(); startRound(1); } }, INTRO_DURATION);
+      startRenderLoop(); // always run — needed for both the lobby face-overlay and any game
+      setTimeout(() => {
+        if (!mounted) return;
+        if (gameMode) startRound(1);   // a game was already chosen (e.g. rejoining mid-match)
+        else setPhase("choosing");      // BUGFIX: used to always startRound(1) into dontlaugh here
+      }, INTRO_DURATION);
     })();
 
     return () => { mounted = false; cleanup(); };
@@ -568,7 +628,22 @@ export default function GameScreen({
     // No TURN server configured — calls between two players on
     // restrictive corporate/mobile NATs may fail to connect directly.
     // Add a TURN server (e.g. Twilio, metered.ca) here if that happens often.
-    const PC_CONFIG = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+    // BUGFIX: STUN-only ICE config. STUN works when both peers are behind
+    // simple/same-network NATs (which is why local testing looked fine), but
+    // fails across many real-world NATs — especially mobile carrier-grade NAT,
+    // which is exactly what international calls (e.g. Japan) hit. A TURN
+    // server relays the media when a direct P2P path can't be found. Using
+    // Open Relay Project's free TURN servers here — for real production
+    // traffic at scale you'd want your own (e.g. Twilio, Metered.ca paid tier).
+    const PC_CONFIG = {
+      iceServers: [
+        { urls: "stun:stun.l.google.com:19302" },
+        { urls: "stun:openrelay.metered.ca:80" },
+        { urls: "turn:openrelay.metered.ca:80",  username: "openrelayproject", credential: "openrelayproject" },
+        { urls: "turn:openrelay.metered.ca:443", username: "openrelayproject", credential: "openrelayproject" },
+        { urls: "turn:openrelay.metered.ca:443?transport=tcp", username: "openrelayproject", credential: "openrelayproject" },
+      ],
+    };
 
     function createPeerConnection() {
       const pc = new RTCPeerConnection(PC_CONFIG);
@@ -721,6 +796,68 @@ export default function GameScreen({
 
       const W = canvas.width, H = canvas.height;
       const lm = ft.landmarks;
+
+      // ── FLOPPY HEAD — separate branch, doesn't touch the smile-overlay code below.
+      // Bird Y is a direct lerp toward the head's nose-tip Y. No gravity, no flap —
+      // exactly what was asked for: move your head, the bird follows on Y only.
+      if (gameMode === "floppy") {
+        const f = floppy.current;
+        if (!f.crashed && phaseRef.current === "playing") {
+          const nose = lm[1]; // MediaPipe nose tip landmark
+          if (nose) f.birdY += (nose.y - f.birdY) * 0.25; // lerp — smooths jitter, still feels instant
+
+          // Scroll + spawn gaps
+          const now = performance.now();
+          if (now - f.lastSpawn > 1400) {
+            f.lastSpawn = now;
+            f.gaps.push({ x: W + 40, gapTop: 0.15 + Math.random() * 0.55, gapH: 0.26, passed: false });
+          }
+          const SPEED = 2.6;
+          f.gaps.forEach(g => g.x -= SPEED);
+          f.gaps = f.gaps.filter(g => g.x > -60);
+
+          const birdX = W * 0.28, birdR = 14;
+          const birdPxY = f.birdY * H;
+
+          f.gaps.forEach(g => {
+            // Score when the bird's x crosses the gap's x
+            if (!g.passed && g.x < birdX) { g.passed = true; f.score++; setFloppyLiveScore(f.score); }
+            // Collision: bird overlaps the gap's x-range AND is outside the gap's vertical opening
+            const inXRange = Math.abs(g.x - birdX) < birdR + 18;
+            const gapTopPx = g.gapTop * H, gapBotPx = (g.gapTop + g.gapH) * H;
+            const inGapY = birdPxY > gapTopPx && birdPxY < gapBotPx;
+            if (inXRange && !inGapY) {
+              f.crashed = true;
+              handleRoundEnd("floppy", false); // crashed = round lost
+            }
+          });
+
+          // Draw gaps (pipes)
+          ctx.fillStyle = "rgba(71,196,255,0.35)";
+          f.gaps.forEach(g => {
+            const gapTopPx = g.gapTop * H, gapBotPx = (g.gapTop + g.gapH) * H;
+            ctx.fillRect(g.x - 18, 0, 36, gapTopPx);
+            ctx.fillRect(g.x - 18, gapBotPx, 36, H - gapBotPx);
+          });
+
+          // Draw bird
+          ctx.beginPath();
+          ctx.fillStyle = "#47c4ff";
+          ctx.shadowColor = "#47c4ff";
+          ctx.shadowBlur = 14;
+          ctx.arc(birdX, birdPxY, birdR, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.shadowBlur = 0;
+
+          // Score readout
+          ctx.font = "bold 22px 'JetBrains Mono', monospace";
+          ctx.fillStyle = "#47c4ff";
+          ctx.fillText(String(f.score), 16, 30);
+        }
+        animRef.current = requestAnimationFrame(render);
+        return;
+      }
+
       const smiling = ft.mar > SMILE_MAR_THRESHOLD || ft.cheekRaise > 0.72;
       const dotColor = smiling ? "#ff4d6d" : "#00f5a0";
       const glowCol  = smiling ? "#ff4d6d" : "#00f5a0";
@@ -794,6 +931,8 @@ export default function GameScreen({
     setMirrorPhase("pose");
     setMyMirrorScore(null);
     poseLMRef.current = null;
+    floppy.current = { birdY: 0.5, gaps: [], score: 0, lastSpawn: performance.now(), crashed: false };
+    setFloppyLiveScore(0);
     setPhase("playing");
 
     // MediaPipe runs continuously via its own camera loop — no startFaceInterval needed
@@ -1048,6 +1187,46 @@ export default function GameScreen({
             )}
 
             {/* ── INTRO ── */}
+            {/* ── CHOOSING — replaces the old silent jump into Don't Laugh.
+                  Both strangers see this the moment the camera's ready and
+                  no game has been picked yet. Either can propose; the other
+                  accepts via the prompt below, and only THEN does a game start. ── */}
+            {phase==="choosing" && (
+              <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:18, background:"rgba(8,8,9,0.86)", zIndex:10, padding:24 }}>
+                <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:"#666", letterSpacing:3, textTransform:"uppercase" }}>
+                  // say hi, then pick something
+                </div>
+                <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"clamp(22px,5vw,32px)", color:"#fff", textAlign:"center" }}>
+                  Choose a game together
+                </div>
+
+                {proposedGame ? (
+                  <div style={{ textAlign:"center", display:"flex", flexDirection:"column", gap:12, alignItems:"center" }}>
+                    <div style={{ fontSize:13, color:"#aaa" }}>
+                      Your stranger wants to play <b style={{ color: MODES[proposedGame]?.color }}>{MODES[proposedGame]?.label}</b>
+                    </div>
+                    <div style={{ display:"flex", gap:10 }}>
+                      <button onClick={() => acceptGame(proposedGame)} style={{ padding:"10px 22px", borderRadius:8, border:"none", background:"#00f5a0", color:"#080809", fontWeight:700, cursor:"pointer" }}>Accept</button>
+                      <button onClick={() => setProposedGame(null)} style={{ padding:"10px 22px", borderRadius:8, border:"1px solid #333", background:"transparent", color:"#999", cursor:"pointer" }}>Not now</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ display:"grid", gridTemplateColumns:"repeat(2,1fr)", gap:10, maxWidth:340 }}>
+                    {Object.entries(MODES).map(([id, m]) => (
+                      <button key={id} onClick={() => proposeGame(id)} style={{
+                        display:"flex", flexDirection:"column", alignItems:"center", gap:6,
+                        padding:"14px 10px", borderRadius:10, cursor:"pointer",
+                        border:`1px solid ${m.color}33`, background:`${m.color}0d`, color:"#eee",
+                      }}>
+                        <span style={{ fontSize:22 }}>{m.emoji}</span>
+                        <span style={{ fontSize:12, fontWeight:600 }}>{m.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
             {phase==="intro" && (
               <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:14, background:"rgba(8,8,9,0.78)", zIndex:10, animation:"fadeIn 0.3s both" }}>
                 <div style={{ fontSize:52 }}>{mode.emoji}</div>
