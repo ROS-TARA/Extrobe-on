@@ -447,17 +447,36 @@ export default function LoginSignup({ onNavigate, onLogin }) {
   const [sErr, setSErr]       = useState({});
   const [sMsg, setSMsg]       = useState(""); // server-level error (username/email taken)
 
+  // forgot/reset password fields
+  const [fEmail, setFEmail]   = useState("");
+  const [fLoad, setFLoad]     = useState(false);
+  const [fMsg, setFMsg]       = useState(""); // generic confirmation, same wording whether or not the email exists
+  const [fErr, setFErr]       = useState("");
+  const [rPass, setRPass]     = useState("");
+  const [rConf, setRConf]     = useState("");
+  const [rLoad, setRLoad]     = useState(false);
+  const [rErr, setRErr]       = useState({});
+  const [resetToken, setResetToken] = useState(null);
+
   // VITE_API_URL → http://localhost:3001 in dev, your Render URL in prod.
   const API = import.meta.env.VITE_API_URL || "https://extrobe-on.onrender.com";
 
   const str = pwStrength(sPass);
 
-  // Already logged in (token in localStorage) → skip this page entirely.
+  // The reset email links to /?resetToken=xxx. If we see that on load,
+  // skip straight to the reset-password screen instead of login/signup.
   useEffect(() => {
-    if (localStorage.getItem("sp_token") && onNavigate) onNavigate("home");
+    const token = new URLSearchParams(window.location.search).get("resetToken");
+    if (token) { setResetToken(token); setMode("reset"); }
   }, []);
 
-  function switchMode(m) { setMode(m); setStep(1); setLErr({}); setSErr({}); setSMsg(""); }
+  // Already logged in (token in localStorage) → skip this page entirely.
+  // Skipped if we're in the middle of a password reset, even if an old token exists.
+  useEffect(() => {
+    if (!resetToken && localStorage.getItem("sp_token") && onNavigate) onNavigate("home");
+  }, []);
+
+  function switchMode(m) { setMode(m); setStep(1); setLErr({}); setSErr({}); setSMsg(""); setFMsg(""); setFErr(""); }
 
   /* localStorage.setItem persists across refreshes — this is the whole
      auth session. sp_token = JWT for API calls. sp_user = display data.
@@ -469,6 +488,49 @@ export default function LoginSignup({ onNavigate, onLogin }) {
     setDoneUser(user.username || user.name || "");
     if (onLogin) onLogin(user);
     setDone(true);
+  }
+
+  async function handleForgot() {
+    if (!fEmail || !fEmail.includes("@")) { setFErr("enter a valid email"); return; }
+    setFLoad(true); setFErr(""); setFMsg("");
+    try {
+      const res = await fetch(`${API}/api/auth/forgot`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: fEmail }),
+      });
+      const data = await res.json();
+      // Server always returns the same generic message on purpose — never
+      // confirms or denies whether that email actually has an account.
+      setFMsg(data.message || "If that email has an account, a reset link is on its way.");
+    } catch {
+      setFErr("can't reach server — is your backend running?");
+    }
+    setFLoad(false);
+  }
+
+  async function handleReset() {
+    const err = {};
+    if (!rPass) err.pass = "set a new password";
+    else if (rPass.length < 8) err.pass = "at least 8 characters";
+    if (rConf !== rPass) err.conf = "passwords don't match";
+    if (Object.keys(err).length) { setRErr(err); return; }
+    setRLoad(true); setRErr({});
+    try {
+      const res = await fetch(`${API}/api/auth/reset-password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: resetToken, password: rPass }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setRErr({ pass: data.error || "reset link is invalid or expired" }); setRLoad(false); return; }
+      // Strip the token from the URL so a refresh doesn't replay it
+      window.history.replaceState({}, "", window.location.pathname);
+      saveSession(data.token, data.user);
+    } catch {
+      setRErr({ pass: "can't reach server — is your backend running?" });
+    }
+    setRLoad(false);
   }
 
   async function handleLogin() {
@@ -572,6 +634,12 @@ export default function LoginSignup({ onNavigate, onLogin }) {
                     <Field label="Password" type="password" placeholder="your password"
                       value={lPass} onChange={v => { setLPass(v); setLErr(e => ({ ...e, pass: "" })); }} error={lErr.pass} />
 
+                    <div style={{ textAlign: "right", marginTop: -4, marginBottom: 14 }}>
+                      <button onClick={() => switchMode("forgot")} style={{ background: "none", border: "none", color: DS.ash, cursor: "pointer", fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5 }}>
+                        forgot password?
+                      </button>
+                    </div>
+
                     <button className="sp-btn-primary" style={{ width: "100%", padding: "13px 0", marginTop: 8 }} onClick={handleLogin} disabled={lLoad}>
                       {lLoad ? <><Spinner />Signing in...</> : "Sign in →"}
                     </button>
@@ -580,6 +648,67 @@ export default function LoginSignup({ onNavigate, onLogin }) {
                       no account?{" "}
                       <button onClick={() => switchMode("signup")} style={{ background: "none", border: "none", color: DS.signal, cursor: "pointer", fontFamily: "'JetBrains Mono', monospace", fontSize: 13 }}>sign up →</button>
                     </div>
+                  </div>
+                )}
+
+                {/* ────── FORGOT PASSWORD ────── */}
+                {mode === "forgot" && (
+                  <div className="ls-panel">
+                    <div style={{ marginBottom: 26 }}>
+                      <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: DS.ash, letterSpacing: 3, textTransform: "uppercase", marginBottom: 8 }}>
+                        // reset access
+                      </div>
+                      <h2 style={{ fontFamily: "'Fraunces', serif", fontWeight: 700, fontStyle: "italic", fontSize: 32, letterSpacing: -0.5, color: DS.plat }}>
+                        Forgot password
+                      </h2>
+                      <p style={{ fontSize: 13, color: DS.ash, marginTop: 8, lineHeight: 1.6 }}>
+                        Enter the email on your account. We'll send a reset link if it exists.
+                      </p>
+                    </div>
+
+                    {fMsg ? (
+                      <div style={{ background: DS.signal + "12", border: `1px solid ${DS.signal}33`, borderRadius: 6, padding: "14px 16px", fontSize: 13, color: DS.plat, lineHeight: 1.6, marginBottom: 20 }}>
+                        {fMsg}
+                      </div>
+                    ) : (
+                      <>
+                        <Field label="Email" type="email" placeholder="you@example.com"
+                          value={fEmail} onChange={v => { setFEmail(v); setFErr(""); }} error={fErr} />
+                        <button className="sp-btn-primary" style={{ width: "100%", padding: "13px 0", marginTop: 8 }} onClick={handleForgot} disabled={fLoad}>
+                          {fLoad ? <><Spinner />Sending...</> : "Send reset link →"}
+                        </button>
+                      </>
+                    )}
+
+                    <div style={{ marginTop: 26, textAlign: "center", fontSize: 13, color: DS.ash, fontFamily: "'JetBrains Mono', monospace" }}>
+                      <button onClick={() => switchMode("login")} style={{ background: "none", border: "none", color: DS.signal, cursor: "pointer", fontFamily: "'JetBrains Mono', monospace", fontSize: 13 }}>← back to sign in</button>
+                    </div>
+                  </div>
+                )}
+
+                {/* ────── RESET PASSWORD — only reached via the emailed link ────── */}
+                {mode === "reset" && (
+                  <div className="ls-panel">
+                    <div style={{ marginBottom: 26 }}>
+                      <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: DS.ash, letterSpacing: 3, textTransform: "uppercase", marginBottom: 8 }}>
+                        // set a new password
+                      </div>
+                      <h2 style={{ fontFamily: "'Fraunces', serif", fontWeight: 700, fontStyle: "italic", fontSize: 32, letterSpacing: -0.5, color: DS.plat }}>
+                        New password
+                      </h2>
+                      <p style={{ fontSize: 13, color: DS.ash, marginTop: 8, lineHeight: 1.6 }}>
+                        This link expires 30 minutes after it was sent.
+                      </p>
+                    </div>
+
+                    <Field label="New Password" type="password" placeholder="at least 8 characters"
+                      value={rPass} onChange={v => { setRPass(v); setRErr(e => ({ ...e, pass: "" })); }} error={rErr.pass} />
+                    <Field label="Confirm Password" type="password" placeholder="same again"
+                      value={rConf} onChange={v => { setRConf(v); setRErr(e => ({ ...e, conf: "" })); }} error={rErr.conf} />
+
+                    <button className="sp-btn-primary" style={{ width: "100%", padding: "13px 0", marginTop: 8 }} onClick={handleReset} disabled={rLoad}>
+                      {rLoad ? <><Spinner />Saving...</> : "Set new password →"}
+                    </button>
                   </div>
                 )}
 

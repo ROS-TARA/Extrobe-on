@@ -503,15 +503,17 @@ function WatchLivePage({ onNavigate, liveCount }) {
   const [filter, setFilter] = useState("all");
   const filters = ["all", "don't laugh", "vibe check", "roast", "mirror"];
 
-  // Fake live streams — in real version these come from socket "liveRooms" event
-  const streams = [
-    { id: 1, game: "Don't Laugh",  players: ["shadow_x 🇺🇸", "foxgirl99 🇰🇷"], viewers: 341, pts: 80, hot: true  },
-    { id: 2, game: "Vibe Check",   players: ["dragonz 🇨🇳", "raj_np 🇳🇵"],     viewers: 127, pts: 30, hot: false },
-    { id: 3, game: "Speed Roast",  players: ["hotboi_br 🇧🇷", "nite_owl 🇬🇧"],  viewers: 512, pts: 120,hot: true  },
-    { id: 4, game: "Mirror Me",    players: ["luna_mx 🇲🇽", "yuki_jp 🇯🇵"],     viewers: 89,  pts: 50, hot: false },
-    { id: 5, game: "Don't Laugh",  players: ["priya_s 🇮🇳", "marco_r 🇧🇷"],     viewers: 204, pts: 60, hot: false },
-    { id: 6, game: "Hot Take",     players: ["ghost_00 🇩🇪", "alex_k 🇺🇸"],     viewers: 178, pts: 40, hot: false },
-  ];
+  // Real streams — populated by the server's "liveRooms" broadcast.
+  // Replaces the old hardcoded fake array; this list is empty until
+  // someone actually taps "Go Live" somewhere in the app right now.
+  const [streams, setStreams] = useState([]);
+
+  useEffect(() => {
+    const onLiveRooms = (rooms) => setStreams(rooms);
+    socket.on("liveRooms", onLiveRooms);
+    socket.emit("liveRooms:get"); // ask for the current list immediately on mount
+    return () => socket.off("liveRooms", onLiveRooms);
+  }, []);
 
   return (
     <div style={{ position: "relative", zIndex: 1, paddingTop: 80, minHeight: "100vh" }}>
@@ -557,6 +559,17 @@ function WatchLivePage({ onNavigate, liveCount }) {
         </div>
 
         {/* Stream grid */}
+        {streams.length === 0 ? (
+          <div className="sp-card sp-up" style={{ padding: "60px 32px", textAlign: "center", marginBottom: 60 }}>
+            <div style={{ fontSize: 36, marginBottom: 16 }}>📡</div>
+            <div style={{ fontFamily: "'Fraunces', serif", fontStyle: "italic", fontWeight: 600, fontSize: 18, marginBottom: 8 }}>
+              Nobody's live right now
+            </div>
+            <div style={{ fontSize: 13, color: DS.ash }}>
+              Be the first — tap Go Live and the crowd shows up here instantly.
+            </div>
+          </div>
+        ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px,1fr))", gap: 16, paddingBottom: 100 }}>
           {streams.map((s, i) => (
             <div key={s.id} className="sp-card sp-up" style={{ animationDelay: `${i * 0.07}s`, overflow: "hidden", cursor: "pointer" }}>
@@ -568,26 +581,17 @@ function WatchLivePage({ onNavigate, liveCount }) {
                 display: "flex", alignItems: "center", justifyContent: "center",
                 fontSize: 36,
               }}>
-                🎮
+                {s.mode === "match" ? "⚔️" : "📡"}
                 {/* live badge */}
                 <div style={{ position: "absolute", top: 10, left: 10 }}>
                   <span className="sp-live-badge"><span className="sp-live-dot" />LIVE</span>
                 </div>
-                {/* hot badge */}
-                {s.hot && (
-                  <div style={{
-                    position: "absolute", top: 10, right: 10,
-                    background: DS.live + "22", border: `1px solid ${DS.live}44`,
-                    borderRadius: 6, padding: "3px 8px",
-                    fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: DS.live,
-                  }}>🔥 HOT</div>
-                )}
                 {/* viewer count */}
                 <div style={{
                   position: "absolute", bottom: 10, right: 10,
                   background: "rgba(0,0,0,0.7)", borderRadius: 6, padding: "3px 8px",
                   fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: DS.plat,
-                }}>👁 {s.viewers}</div>
+                }}>👁 {s.viewers || 0}</div>
               </div>
 
               {/* Info */}
@@ -596,17 +600,11 @@ function WatchLivePage({ onNavigate, liveCount }) {
                   <div style={{
                     fontFamily: "'Fraunces', serif",
                     fontWeight: 600, fontSize: 14, color: DS.plat,
-                  }}>{s.game}</div>
-                  <span className="sp-tag" style={{ color: DS.gold, borderColor: DS.gold + "33", background: DS.gold + "0f" }}>
-                    {s.pts}pts at stake
-                  </span>
+                  }}>{s.title}</div>
+                  <span className="sp-tag">{s.mode === "match" ? "live match" : "solo stream"}</span>
                 </div>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  {s.players.map(p => (
-                    <span key={p} style={{ fontSize: 12, color: DS.ash, fontFamily: "'JetBrains Mono', monospace" }}>
-                      {p}
-                    </span>
-                  ))}
+                <div style={{ fontSize: 12, color: DS.ash, fontFamily: "'JetBrains Mono', monospace" }}>
+                  {s.user?.flag || "🌍"} {s.user?.username || "anonymous"}
                 </div>
                 <button className="sp-btn-primary" style={{ marginTop: 14, width: "100%", padding: "10px" }}>
                   Watch Now
@@ -615,6 +613,7 @@ function WatchLivePage({ onNavigate, liveCount }) {
             </div>
           ))}
         </div>
+        )}
       </div>
     </div>
   );
@@ -629,6 +628,30 @@ function GoLivePage({ user, onNavigate, webrtc }) {
   const [liveMode, setLiveMode] = useState("stream"); // "stream" | "match"
   const [step, setStep] = useState("setup"); // "setup" | "live"
   const [title, setTitle] = useState("");
+
+  // Tell the server (and therefore every WatchLivePage open right now) that we've gone live.
+  // Without this emit, "going live" was purely local UI — nobody else could ever know.
+  const goLive = () => {
+    socket.emit("golive:start", {
+      mode: liveMode,
+      title: title || "Live now",
+      user: user ? { username: user.username, flag: user.flag } : null,
+    });
+    setStep("live");
+  };
+
+  const endLive = () => {
+    socket.emit("golive:end");
+    setStep("setup");
+    webrtc.stopCamera();
+  };
+
+  // If they close the tab/navigate away mid-stream without hitting "End Stream",
+  // the server's disconnect handler cleans it up — but if they just switch pages
+  // inside the app (no disconnect happens), we still need to tell the server.
+  useEffect(() => {
+    return () => { if (step === "live") socket.emit("golive:end"); };
+  }, [step]);
 
   if (!user) {
     return (
@@ -756,7 +779,7 @@ function GoLivePage({ user, onNavigate, webrtc }) {
             <button
               className="sp-btn-primary"
               style={{ padding: "14px", width: "100%", fontSize: 15 }}
-              onClick={() => setStep("live")}
+              onClick={goLive}
               disabled={!webrtc.stream}
             >
               {liveMode === "stream" ? "Start Streaming →" : "Find Opponent & Go Live →"}
@@ -775,7 +798,7 @@ function GoLivePage({ user, onNavigate, webrtc }) {
             <div style={{ fontSize: 13, color: DS.ash, marginBottom: 24 }}>
               Crowd is watching. {liveMode === "match" ? "Finding opponent..." : "Stream is active."}
             </div>
-            <button className="sp-btn-ghost" style={{ padding: "10px 28px" }} onClick={() => { setStep("setup"); webrtc.stopCamera(); }}>
+            <button className="sp-btn-ghost" style={{ padding: "10px 28px" }} onClick={endLive}>
               End Stream
             </button>
           </div>
@@ -824,6 +847,21 @@ export default function StrangerPlay() {
 
   /* ── LIVE COUNT from socket ── */
   const [liveCount, setLiveCount] = useState(0);
+
+  // Real leaderboard — replaces the hardcoded top-5 fake list.
+  // /api/leaderboard already existed server-side and was just never called.
+  const [leaderboard, setLeaderboard] = useState([]);
+  const [lbLoading, setLbLoading] = useState(true);
+  useEffect(() => {
+    if (page !== "ranks") return;
+    setLbLoading(true);
+    fetch(`${import.meta.env.VITE_API_URL || "https://extrobe-on.onrender.com"}/api/leaderboard`)
+      .then(r => r.json())
+      .then(data => setLeaderboard(Array.isArray(data) ? data : []))
+      .catch(() => setLeaderboard([]))
+      .finally(() => setLbLoading(false));
+  }, [page]);
+
 
   /* ── MATCHMAKING ── */
   const [matchPhase, setMatchPhase] = useState("idle");
@@ -879,6 +917,25 @@ export default function StrangerPlay() {
 
   const goTo = (p) => setPage(p);
 
+  // Opens Stripe Checkout for the 50-coin / $5 starter pack.
+  // Coins are only credited after Stripe's webhook confirms real payment —
+  // never on the frontend directly, so this can't be faked into free coins.
+  const buyCoins = async () => {
+    try {
+      const token = localStorage.getItem("sp_token");
+      const res = await fetch(`${import.meta.env.VITE_API_URL || "https://extrobe-on.onrender.com"}/api/coins/checkout`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+        body: JSON.stringify({ packageIndex: 0 }),
+      });
+      const data = await res.json();
+      if (!res.ok) { alert(data.error || "Couldn't start checkout"); return; }
+      window.location.href = data.url; // redirect to Stripe's hosted checkout page
+    } catch {
+      alert("Can't reach server");
+    }
+  };
+
   const startSearch = (gameMode = selectedGame) => {
     setMatchPhase("searching");
     setQueueTime(0);
@@ -896,13 +953,6 @@ export default function StrangerPlay() {
   };
 
   const [menuOpen, setMenuOpen] = useState(false);
-
-  const NAV_LINKS = [
-    { label: "Home",      id: "home"     },
-    { label: "Games",     id: "games"    },
-    { label: "Ranks",     id: "ranks"    },
-    { label: "Rewards",   id: "rewards"  },
-  ];
 
   return (
     <div style={{ minHeight: "100vh", background: DS.void, color: DS.plat, fontFamily: "'Inter', sans-serif", overflowX: "hidden" }}>
@@ -942,24 +992,6 @@ export default function StrangerPlay() {
           }}>StrangerPlay</span>
         </div>
 
-        {/* Desktop nav links */}
-        <div className="hide-mobile" style={{ gap: 28, alignItems: "center" }}>
-          {NAV_LINKS.map(l => (
-            <span
-              key={l.id}
-              className={`sp-nav-item ${page === l.id ? "active" : ""}`}
-              onClick={() => goTo(l.id)}
-              style={{
-                fontSize: 13, fontWeight: 500,
-                color: page === l.id ? DS.plat : DS.ash,
-                cursor: "pointer",
-                transition: "color 0.15s",
-                paddingBottom: 4,
-              }}
-            >{l.label}</span>
-          ))}
-        </div>
-
         {/* Desktop right section */}
         <div className="hide-mobile" style={{ alignItems: "center", gap: 10 }}>
           {/* Live count */}
@@ -981,41 +1013,45 @@ export default function StrangerPlay() {
             </span>
           )}
 
-          {/* BUG FIX #2: Login button hidden after login */}
+          {/* Coins — separate currency from points. Points = skill score from
+              winning matches. Coins = spendable, bought with real money,
+              used as entry fee for games. Click opens the purchase flow. */}
+          {user && (
+            <button
+              onClick={buyCoins}
+              className="sp-btn-ghost"
+              style={{ padding: "4px 10px", fontSize: 12, fontFamily: "'JetBrains Mono', monospace", color: DS.signal, borderColor: DS.signal + "33" }}
+              title="Buy more coins"
+            >
+              🪙 {user.coins ?? 0}
+            </button>
+          )}
+
+          {/* BUG FIX #2: Login button hidden after login. Per latest review:
+              no separate Play button here anymore, and a logged-in user sees
+              ONLY a single profile avatar — no username text, no inline logout.
+              Sign-out lives in Settings now, not duplicated in the header. */}
           {!user ? (
             <button className="sp-btn-ghost" style={{ padding: "7px 16px" }} onClick={() => goTo("login")}>
               Sign in
             </button>
           ) : (
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <div
-                onClick={() => goTo("profile")}
-                style={{
-                  display: "flex", alignItems: "center", gap: 7,
-                  background: DS.surface, border: `1px solid ${DS.rim}`,
-                  borderRadius: 9, padding: "6px 12px", cursor: "pointer",
-                  transition: "border-color 0.15s",
-                }}
-                onMouseEnter={e => e.currentTarget.style.borderColor = DS.signal + "44"}
-                onMouseLeave={e => e.currentTarget.style.borderColor = DS.rim}
-              >
-                <span style={{ fontSize: 14 }}>🧑‍💻</span>
-                <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: DS.signal }}>
-                  {user.username}
-                </span>
-              </div>
-              <button className="sp-btn-ghost" style={{ padding: "6px 12px", fontSize: 12 }} onClick={handleLogout}>out</button>
-            </div>
+            <button
+              onClick={() => goTo("profile")}
+              aria-label="Profile"
+              style={{
+                width: 34, height: 34, borderRadius: "50%",
+                background: DS.surface, border: `1px solid ${DS.rim}`,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                cursor: "pointer", fontSize: 15, padding: 0,
+                transition: "border-color 0.15s",
+              }}
+              onMouseEnter={e => e.currentTarget.style.borderColor = DS.signal + "66"}
+              onMouseLeave={e => e.currentTarget.style.borderColor = DS.rim}
+            >
+              🧑‍💻
+            </button>
           )}
-
-          {/* Play CTA */}
-          <button
-            className="sp-btn-primary"
-            style={{ padding: "8px 18px", fontSize: 13 }}
-            onClick={() => startSearch()}
-          >
-            ▶ Play
-          </button>
         </div>
 
         {/* Mobile right */}
@@ -1046,16 +1082,6 @@ export default function StrangerPlay() {
           animation: "sp-in 0.22s both",
           display: "flex", flexDirection: "column", gap: 2,
         }}>
-          {NAV_LINKS.map(l => (
-            <button key={l.id} onClick={() => { goTo(l.id); setMenuOpen(false); }} style={{
-              background: page === l.id ? DS.signal + "0a" : "none",
-              border: "none", borderRadius: 10, padding: "12px 16px",
-              color: page === l.id ? DS.signal : DS.ash,
-              fontFamily: "'Inter', sans-serif", fontWeight: 500, fontSize: 15,
-              cursor: "pointer", textAlign: "left",
-            }}>{l.label}</button>
-          ))}
-          <div style={{ height: 1, background: DS.rim, margin: "8px 0" }} />
           {[["🎁", "Rewards", "rewards"], ["⚙️", "Settings", "settings"], ["👤", "Profile", "profile"]].map(([icon, label, id]) => (
             <button key={id} onClick={() => { goTo(id); setMenuOpen(false); }} style={{
               background: "none", border: "none", borderRadius: 10, padding: "12px 16px",
@@ -1078,10 +1104,6 @@ export default function StrangerPlay() {
               Sign out
             </button>
           )}
-          <button className="sp-btn-primary" style={{ padding: "13px 16px", marginTop: 6, fontSize: 14 }}
-            onClick={() => { startSearch(); setMenuOpen(false); }}>
-            ▶ Play Now
-          </button>
         </div>
       )}
 
@@ -1411,14 +1433,14 @@ export default function StrangerPlay() {
             <div style={{ display: "grid", gridTemplateColumns: "48px 1fr 100px 72px", padding: "10px 20px", borderBottom: `1px solid ${DS.rim}`, fontSize: 10, color: DS.ash, letterSpacing: 2, textTransform: "uppercase", fontFamily: "'JetBrains Mono', monospace" }}>
               <span /><span>Player</span><span>Points</span><span className="lb-wins">Wins</span>
             </div>
-            {[
-              { rank: 1,  name: "shadow_x",   flag: "🇺🇸", pts: 9840, wins: 312 },
-              { rank: 2,  name: "foxgirl99",  flag: "🇰🇷", pts: 8210, wins: 287 },
-              { rank: 3,  name: "hotboi_br",  flag: "🇧🇷", pts: 7550, wins: 241 },
-              { rank: 4,  name: "dragonz",    flag: "🇨🇳", pts: 6890, wins: 198 },
-              { rank: 5,  name: "nite_owl",   flag: "🇬🇧", pts: 5920, wins: 167 },
-              { rank: 42, name: user?.username || "raj_np", flag: "🇳🇵", pts: points, wins: 3, isMe: true },
-            ].map((r, i) => <LBRow key={r.rank} {...r} delay={i * 0.07} />)}
+            {leaderboard.length === 0 ? (
+              <div style={{ padding: "40px 20px", textAlign: "center", color: DS.ash, fontSize: 13 }}>
+                {lbLoading ? "Loading real rankings…" : "Nobody's played yet — be the first on the board."}
+              </div>
+            ) : leaderboard.map((r, i) => (
+              <LBRow key={r._id || r.username} rank={i + 1} name={r.username} flag={r.flag} pts={r.points} wins={r.wins}
+                isMe={user && r.username === user.username} delay={i * 0.07} />
+            ))}
           </div>
         </div>
       )}
@@ -1434,11 +1456,11 @@ export default function StrangerPlay() {
 
       {/* BUG FIX #3: user and points now passed to Profile */}
       {page === "profile" && (
-        <Profile onNavigate={goTo} user={user} points={points} />
+        <Profile onNavigate={goTo} user={user} points={points} onUserUpdate={handleLogin} />
       )}
 
       {page === "rewards"  && <Rewards  onNavigate={goTo} />}
-      {page === "settings" && <Settings onNavigate={goTo} user={user} />}
+      {page === "settings" && <Settings onNavigate={goTo} user={user} onUserUpdate={handleLogin} />}
       {page === "games"    && <GameSection onBack={() => goTo("home")} myPoints={points} />}
 
       {/* GameScreen — only renders on real match */}

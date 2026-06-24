@@ -344,13 +344,54 @@ function FriendCard({ name, flag, pts, online, delay }) {
    MAIN EXPORT — same props/data contract as before
    Props: onNavigate(page), user (safeUser shape), points (override)
 ──────────────────────────────────────────────── */
-export default function Profile({ onNavigate, user, points: propPoints }) {
+function hasAnyLink(links) {
+  return !!(links && (links.instagram || links.tiktok || links.youtube || links.twitter));
+}
+
+export default function Profile({ onNavigate, user, points: propPoints, onUserUpdate }) {
   const [tab, setTab]           = useState("stats");
   const [editMode, setEditMode] = useState(false);
   const [copied, setCopied]     = useState(false);
+  const [saving, setSaving]     = useState(false);
+  const [saveErr, setSaveErr]   = useState("");
 
   const [username, setUsername] = useState(user?.username || "guest");
   const [bio, setBio]           = useState(user?.bio || "here to embarrass strangers");
+  const [links, setLinks] = useState({
+    instagram: user?.socialLinks?.instagram || "",
+    tiktok:    user?.socialLinks?.tiktok    || "",
+    youtube:   user?.socialLinks?.youtube   || "",
+    twitter:   user?.socialLinks?.twitter   || "",
+  });
+
+  const API = import.meta.env.VITE_API_URL || "https://extrobe-on.onrender.com";
+
+  // Real save — this used to be local-only ("saved locally for now" comment
+  // is gone because it's no longer true). Calls the same PATCH route Settings
+  // uses, so username/bio/social links actually persist in MongoDB.
+  async function handleSaveProfile() {
+    setSaving(true); setSaveErr("");
+    try {
+      const token = localStorage.getItem("sp_token");
+      const res = await fetch(`${API}/api/user/settings`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+        body: JSON.stringify({ username, bio, socialLinks: links }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setSaveErr(data.error || "couldn't save"); setSaving(false); return; }
+
+      const saved = JSON.parse(localStorage.getItem("sp_user") || "{}");
+      const updated = { ...saved, ...data };
+      localStorage.setItem("sp_user", JSON.stringify(updated));
+      if (onUserUpdate) onUserUpdate(updated);
+
+      setEditMode(false);
+    } catch {
+      setSaveErr("can't reach server");
+    }
+    setSaving(false);
+  }
 
   const points      = propPoints ?? user?.points ?? 0;
   const wins        = user?.wins ?? 0;
@@ -415,7 +456,7 @@ export default function Profile({ onNavigate, user, points: propPoints }) {
                   </div>
                 )}
 
-                <div className="pf-meta-row" style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
+                <div className="pf-meta-row" style={{ display: "flex", gap: 24, flexWrap: "wrap", marginBottom: editMode || hasAnyLink(links) ? 14 : 0 }}>
                   {[[following, "following"], [followers, "followers"], [wins, "wins"], [gamesPlayed, "games"]].map(([val, lbl]) => (
                     <div key={lbl}>
                       <span style={{ fontFamily: "'Fraunces', serif", fontWeight: 700, fontStyle: "italic", fontSize: 18, color: DS.plat, marginRight: 5 }}>{val}</span>
@@ -423,6 +464,26 @@ export default function Profile({ onNavigate, user, points: propPoints }) {
                     </div>
                   ))}
                 </div>
+
+                {/* ── SOCIAL LINKS ── */}
+                {editMode ? (
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, maxWidth: 380 }}>
+                    {[["instagram","📷 instagram"],["tiktok","🎵 tiktok"],["youtube","▶️ youtube"],["twitter","✕ twitter"]].map(([key, label]) => (
+                      <input key={key} className="sp-input" placeholder={label}
+                        value={links[key]} onChange={e => setLinks(l => ({ ...l, [key]: e.target.value }))}
+                        style={{ fontSize: 12, padding: "8px 10px" }} />
+                    ))}
+                  </div>
+                ) : hasAnyLink(links) && (
+                  <div style={{ display: "flex", gap: 10 }}>
+                    {[["instagram","📷"],["tiktok","🎵"],["youtube","▶️"],["twitter","✕"]].map(([key, icon]) => links[key] && (
+                      <a key={key} href={links[key].startsWith("http") ? links[key] : `https://${links[key]}`}
+                        target="_blank" rel="noopener noreferrer"
+                        style={{ fontSize: 16, textDecoration: "none", opacity: 0.8 }}
+                        title={key}>{icon}</a>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
 
@@ -431,14 +492,14 @@ export default function Profile({ onNavigate, user, points: propPoints }) {
 
           {/* ── ACTIONS ── */}
           <div className="pf-actions pf-up" style={{ display: "flex", gap: 8, marginTop: 18, alignItems: "center" }}>
-            <button className="sp-btn-primary" style={{ padding: "9px 20px" }} onClick={() => setEditMode(e => !e)}>
-              {editMode ? "Save →" : "Edit profile"}
+            <button className="sp-btn-primary" style={{ padding: "9px 20px" }} onClick={() => editMode ? handleSaveProfile() : setEditMode(true)} disabled={saving}>
+              {saving ? "Saving..." : editMode ? "Save →" : "Edit profile"}
             </button>
             <button className="sp-icon-btn" onClick={copyLink} title="Copy profile link">{copied ? "✓" : "🔗"}</button>
             <button className="sp-icon-btn" onClick={() => onNavigate && onNavigate("settings")} title="Settings">⚙️</button>
-            {editMode && (
-              <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, color: DS.ghost, marginLeft: 4 }}>
-                // saved locally for now — account sync is next
+            {saveErr && (
+              <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: DS.live, marginLeft: 4 }}>
+                {saveErr}
               </span>
             )}
           </div>

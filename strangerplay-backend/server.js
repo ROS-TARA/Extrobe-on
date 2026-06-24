@@ -32,6 +32,8 @@ const mongoose   = require("mongoose");
 const bcrypt     = require("bcryptjs");
 const jwt        = require("jsonwebtoken");
 const cors       = require("cors");
+const crypto     = require("crypto");
+const nodemailer = require("nodemailer");
 
 const app    = express();
 const server = http.createServer(app);
@@ -58,7 +60,14 @@ app.use(cors({
   credentials: true,
 }));
 
-app.use(express.json());
+// The Stripe webhook needs the RAW request body to verify its signature —
+// express.json() would already have parsed/consumed it by the time the route
+// handler runs, which silently breaks signature verification. Skip JSON
+// parsing for that one path only; its own route below applies express.raw().
+app.use((req, res, next) => {
+  if (req.path === "/api/coins/webhook") return next();
+  express.json()(req, res, next);
+});
 
 /* ─────────────────────────────────────────────
    SOCKET.IO
@@ -95,13 +104,24 @@ const UserSchema = new mongoose.Schema({
   flag:        { type: String, default: "🌍" },
   country:     { type: String, default: "" },
   points:      { type: Number, default: 0 },
+  coins:       { type: Number, default: 20 }, // free starter coins so new players aren't stuck
   wins:        { type: Number, default: 0 },
   gamesPlayed: { type: Number, default: 0 },
   followers:   { type: Number, default: 0 },
   following:   { type: Number, default: 0 },
   bio:         { type: String, default: "" },
+  socialLinks: {
+    instagram: { type: String, default: "" },
+    tiktok:    { type: String, default: "" },
+    youtube:   { type: String, default: "" },
+    twitter:   { type: String, default: "" },
+  },
   rank:        { type: String, default: "Bronze I" },
   globalRank:  { type: Number, default: 9999 },
+  // forgot-password: we store a HASH of the token, never the raw token.
+  // If the DB ever leaks, a stolen hash can't be used to reset anyone's password.
+  resetTokenHash:   { type: String, default: null },
+  resetTokenExpiry: { type: Date,   default: null },
   createdAt:   { type: Date, default: Date.now },
 });
 
@@ -171,14 +191,55 @@ function safeUser(u) {
     flag: u.flag,
     country: u.country,
     points: u.points,
+    coins: u.coins,
     wins: u.wins,
     gamesPlayed: u.gamesPlayed,
     followers: u.followers,
     following: u.following,
     bio: u.bio,
+    socialLinks: u.socialLinks || {},
     rank: calculateRank(u.points),
     createdAt: u.createdAt,
   };
+}
+
+/* ─────────────────────────────────────────────
+   EMAIL — Gmail SMTP via nodemailer (free, no domain needed)
+   Setup (you do this once, manually):
+     1. Turn on 2-Step Verification on the Gmail account you'll send from
+     2. Go to https://myaccount.google.com/apppasswords
+     3. Generate an "app password" (16 chars, no spaces)
+     4. In strangerplay-backend/.env add:
+          GMAIL_USER=youraddress@gmail.com
+          GMAIL_APP_PASS=the16charapppassword
+     5. Restart the server
+   Gmail's free tier caps at ~500 emails/day — plenty for now.
+───────────────────────────────────────────── */
+const mailer = nodemailer.createTransport({
+  service: "gmail",
+  auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASS },
+});
+
+async function sendResetEmail(toEmail, resetUrl) {
+  // If Gmail creds aren't set yet, don't crash the route — just log it,
+  // so you can keep testing the rest of the app while you set up email.
+  if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASS) {
+    console.warn("⚠️  GMAIL_USER/GMAIL_APP_PASS not set — reset email not sent. Link would be:", resetUrl);
+    return;
+  }
+  await mailer.sendMail({
+    from: `StrangerPlay <${process.env.GMAIL_USER}>`,
+    to: toEmail,
+    subject: "Reset your StrangerPlay password",
+    html: `
+      <div style="font-family:sans-serif;background:#0d0b08;color:#f4ede1;padding:32px;border-radius:8px;">
+        <h2 style="color:#c97b3d;">StrangerPlay</h2>
+        <p>Someone requested a password reset for this account. If that wasn't you, ignore this email.</p>
+        <p><a href="${resetUrl}" style="display:inline-block;margin-top:12px;padding:10px 20px;background:#c97b3d;color:#0d0b08;text-decoration:none;border-radius:4px;font-weight:bold;">Reset password</a></p>
+        <p style="font-size:12px;color:#8a7d68;margin-top:20px;">This link expires in 30 minutes.</p>
+      </div>
+    `,
+  });
 }
 
 /* ─────────────────────────────────────────────
@@ -237,6 +298,156 @@ app.post("/api/auth/signin", async (req, res) => {
   }
 });
 
+// POST /api/auth/forgot — request a reset link
+// Always returns the same generic message whether or not the email exists.
+// This stops attackers from using this route to discover which emails have accounts.
+app.post("/api/auth/forgot", async (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ error: "email required" });
+
+  const generic = { message: "If that email has an account, a reset link is on its way." };
+
+  try {
+    const user = await User.findOne({ email: email.toLowerCase() });
+    if (!user) return res.json(generic); // don't leak whether the account exists
+
+    // Raw token goes in the email link. Only the HASH is stored in the DB.
+    // Even if the DB leaks, nobody can reset a password from the hash alone.
+    const rawToken = crypto.randomBytes(32).toString("hex");
+    const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+
+    user.resetTokenHash = tokenHash;
+    user.resetTokenExpiry = new Date(Date.now() + 30 * 60 * 1000); // 30 min
+    await user.save();
+
+    const resetUrl = `${process.env.FRONTEND_URL || "http://localhost:5173"}/?resetToken=${rawToken}`;
+    await sendResetEmail(user.email, resetUrl);
+
+    return res.json(generic);
+  } catch (e) {
+    console.error("forgot-password error:", e);
+    // Still return the generic message — never confirm/deny via error shape either.
+    return res.json(generic);
+  }
+});
+
+// POST /api/auth/reset-password — consume the token, set new password
+app.post("/api/auth/reset-password", async (req, res) => {
+  const { token, password } = req.body;
+  if (!token || !password) return res.status(400).json({ error: "token + password required" });
+  if (password.length < 8) return res.status(400).json({ error: "password must be 8+ chars" });
+
+  try {
+    const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+    const user = await User.findOne({
+      resetTokenHash: tokenHash,
+      resetTokenExpiry: { $gt: new Date() }, // must not be expired
+    });
+    if (!user) return res.status(400).json({ error: "reset link is invalid or expired" });
+
+    user.password = await bcrypt.hash(password, 10);
+    user.resetTokenHash = null;
+    user.resetTokenExpiry = null;
+    await user.save();
+
+    // Log them in immediately after reset — one less step for the user
+    const jwtToken = signToken(user._id);
+    return res.json({ token: jwtToken, user: safeUser(user) });
+  } catch (e) {
+    console.error("reset-password error:", e);
+    res.status(500).json({ error: "server error" });
+  }
+});
+
+// POST /api/auth/change-password — logged-in user changing their own password
+// (Different from reset-password: this requires knowing the CURRENT password,
+// since the user is already authenticated — no email token needed here.)
+app.post("/api/auth/change-password", auth, async (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+  if (!currentPassword || !newPassword) return res.status(400).json({ error: "current + new password required" });
+  if (newPassword.length < 8) return res.status(400).json({ error: "new password must be 8+ chars" });
+
+  try {
+    const user = await User.findById(req.userId);
+    if (!user) return res.status(404).json({ error: "user not found" });
+
+    const match = await bcrypt.compare(currentPassword, user.password);
+    if (!match) return res.status(401).json({ error: "current password is wrong" });
+
+    user.password = await bcrypt.hash(newPassword, 10);
+    await user.save();
+    res.json({ message: "password updated" });
+  } catch (e) {
+    console.error("change-password error:", e);
+    res.status(500).json({ error: "server error" });
+  }
+});
+
+/* ─────────────────────────────────────────────
+   COINS — purchase via Stripe Checkout
+   10 coins per $1. Withdrawal/cash-out is NOT built here — see chat note:
+   that needs Stripe Connect + KYC and deserves its own dedicated session,
+   not a bolt-on. This route only handles buying coins with a card.
+───────────────────────────────────────────── */
+let stripe = null;
+try { stripe = require("stripe")(process.env.STRIPE_SECRET_KEY || ""); } catch { /* stripe not installed yet */ }
+
+const COIN_PACKAGES = [
+  { coins: 50,   usd: 5  },
+  { coins: 120,  usd: 10 }, // small bonus for buying more at once
+  { coins: 650,  usd: 50 },
+];
+
+app.post("/api/coins/checkout", auth, async (req, res) => {
+  if (!stripe || !process.env.STRIPE_SECRET_KEY) {
+    return res.status(503).json({ error: "Payments aren't set up yet — add STRIPE_SECRET_KEY to .env and run `npm install stripe`." });
+  }
+  const { packageIndex } = req.body;
+  const pkg = COIN_PACKAGES[packageIndex];
+  if (!pkg) return res.status(400).json({ error: "invalid package" });
+
+  try {
+    const session = await stripe.checkout.sessions.create({
+      mode: "payment",
+      payment_method_types: ["card"],
+      line_items: [{
+        price_data: {
+          currency: "usd",
+          product_data: { name: `${pkg.coins} StrangerPlay coins` },
+          unit_amount: pkg.usd * 100,
+        },
+        quantity: 1,
+      }],
+      metadata: { userId: req.userId, coins: pkg.coins },
+      success_url: `${process.env.FRONTEND_URL || "http://localhost:5173"}/?coinsPurchased=1`,
+      cancel_url: `${process.env.FRONTEND_URL || "http://localhost:5173"}/`,
+    });
+    res.json({ url: session.url });
+  } catch (e) {
+    console.error("stripe checkout error:", e);
+    res.status(500).json({ error: "couldn't start checkout" });
+  }
+});
+
+// Stripe calls this when payment actually succeeds — coins are only credited
+// here, never directly from the frontend, so a user can't just fake success_url
+// and grant themselves free coins.
+app.post("/api/coins/webhook", express.raw({ type: "application/json" }), async (req, res) => {
+  if (!stripe) return res.status(503).end();
+  let event;
+  try {
+    event = stripe.webhooks.constructEvent(req.body, req.headers["stripe-signature"], process.env.STRIPE_WEBHOOK_SECRET);
+  } catch (e) {
+    console.error("webhook signature invalid:", e.message);
+    return res.status(400).end();
+  }
+  if (event.type === "checkout.session.completed") {
+    const { userId, coins } = event.data.object.metadata;
+    await User.findByIdAndUpdate(userId, { $inc: { coins: Number(coins) } });
+  }
+  res.json({ received: true });
+});
+
 /* ─────────────────────────────────────────────
    REST — USER
 ───────────────────────────────────────────── */
@@ -255,15 +466,39 @@ app.get("/api/user/:username", async (req, res) => {
 // PATCH /api/user/settings — update bio, flag, etc.
 app.patch("/api/user/settings", auth, async (req, res) => {
   try {
-    const { bio, flag, country } = req.body;
-    const user = await User.findByIdAndUpdate(
-      req.userId,
-      { ...(bio !== undefined && { bio }), ...(flag && { flag }), ...(country && { country }) },
-      { new: true }
-    );
+    const { username, email, bio, flag, country, socialLinks } = req.body;
+    const update = {};
+    if (bio !== undefined) update.bio = bio;
+    if (flag)               update.flag = flag;
+    if (country)            update.country = country;
+    if (socialLinks && typeof socialLinks === "object") {
+      // Merge rather than overwrite — Profile only sends what it has, and
+      // Settings might only send some fields. Build it as dot-paths so
+      // Mongo merges instead of replacing the whole sub-object with undefineds.
+      for (const key of ["instagram", "tiktok", "youtube", "twitter"]) {
+        if (socialLinks[key] !== undefined) update[`socialLinks.${key}`] = socialLinks[key];
+      }
+    }
+
+    // username/email are unique-indexed — a blind update would crash with a
+    // duplicate-key error if someone else already has that value. Check first,
+    // and exclude the current user from the collision check.
+    if (username) {
+      const taken = await User.findOne({ username: username.toLowerCase(), _id: { $ne: req.userId } });
+      if (taken) return res.status(409).json({ error: "username already taken" });
+      update.username = username.toLowerCase();
+    }
+    if (email) {
+      const taken = await User.findOne({ email: email.toLowerCase(), _id: { $ne: req.userId } });
+      if (taken) return res.status(409).json({ error: "email already taken" });
+      update.email = email.toLowerCase();
+    }
+
+    const user = await User.findByIdAndUpdate(req.userId, update, { new: true });
     if (!user) return res.status(404).json({ error: "user not found" });
     res.json(safeUser(user));
-  } catch {
+  } catch (e) {
+    console.error("settings update error:", e);
     res.status(500).json({ error: "server error" });
   }
 });
@@ -314,6 +549,15 @@ app.get("/api/matches/:userId", auth, async (req, res) => {
 const queue = [];                // waiting players
 const rooms = new Map();         // active matches
 
+// Live broadcasts — keyed by socket.id of the broadcaster.
+// This is the missing piece that made "Go Live" invisible everywhere else:
+// GoLivePage never told anyone it started, and WatchLivePage never asked.
+const liveStreams = new Map();   // socket.id -> { id, mode, title, user, viewers }
+
+function broadcastLiveRooms() {
+  io.emit("liveRooms", Array.from(liveStreams.values()));
+}
+
 // How many sockets are connected right now
 // io.engine.clientsCount is the live number — no DB needed
 function broadcastOnlineCount() {
@@ -323,6 +567,30 @@ function broadcastOnlineCount() {
 io.on("connection", (socket) => {
   console.log("🔌 connected:", socket.id);
   broadcastOnlineCount();
+
+  // Someone tapped "Start Streaming" / "Find Opponent & Go Live" in GoLivePage
+  socket.on("golive:start", ({ mode, title, user }) => {
+    liveStreams.set(socket.id, {
+      id: socket.id,
+      mode,                              // "stream" | "match"
+      title: title || "Live now",
+      user: user || { username: "anonymous" },
+      viewers: 0,
+      startedAt: Date.now(),
+    });
+    broadcastLiveRooms();
+  });
+
+  // "End Stream" button, or they just close the tab (handled in disconnect below too)
+  socket.on("golive:end", () => {
+    liveStreams.delete(socket.id);
+    broadcastLiveRooms();
+  });
+
+  // Send the current list to anyone who just opened WatchLivePage
+  socket.on("liveRooms:get", () => {
+    socket.emit("liveRooms", Array.from(liveStreams.values()));
+  });
 
   /* ─── AUTH (optional for spectating, required for playing) ───
      After connecting, the frontend sends "auth" with the JWT token.
@@ -434,6 +702,45 @@ io.on("connection", (socket) => {
     console.log(`❌ left queue: ${socket.id} | queue: ${queue.length}`);
   });
 
+  /* ─── IN-CALL GAME SELECTION ─────────────────────────────────
+     Two strangers connect with no game chosen (gameMode is null until
+     now). Either one can propose a game from the in-call rail; the other
+     accepts, and THAT'S the moment coins get spent — not at queue time. */
+  const GAME_COSTS = {
+    dontlaugh: 1, vibecheck: 1, hottake: 1, mirrorme: 1,
+    echo: 1, finishmystory: 1,
+  };
+
+  socket.on("proposeGame", ({ roomId, game }) => {
+    if (!rooms.has(roomId)) return;
+    io.to(roomId).emit("gameProposed", { game, proposedBy: socket.id });
+  });
+
+  socket.on("acceptGame", async ({ roomId, game }) => {
+    const room = rooms.get(roomId);
+    if (!room) return;
+    const cost = GAME_COSTS[game] || 1;
+
+    const players = [room.offerer, room.answerer].filter(p => p.userId);
+    // Atomic, race-safe deduction: only succeeds if the balance is still
+    // >= cost at the moment of the update. Two simultaneous spends can't
+    // both succeed and push someone's coins negative.
+    for (const p of players) {
+      const updated = await User.findOneAndUpdate(
+        { _id: p.userId, coins: { $gte: cost } },
+        { $inc: { coins: -cost } },
+        { new: true }
+      );
+      if (!updated) {
+        io.to(roomId).emit("gameRejected", { game, reason: "not enough coins", userId: p.userId });
+        return;
+      }
+    }
+
+    room.gameMode = game;
+    io.to(roomId).emit("gameStarted", { game, cost });
+  });
+
   /* ─── WEBRTC SIGNALING ──────────────────────────────────────
      The server just relays these messages — it never reads the SDP/ICE data.
      Think of it as a walkie-talkie relay:
@@ -533,6 +840,12 @@ io.on("connection", (socket) => {
   /* ─── DISCONNECT ────────────────────────────────────────────*/
   socket.on("disconnect", () => {
     console.log("🔌 disconnected:", socket.id);
+
+    // If they were live and just closed the tab — pull them off Watch Live too
+    if (liveStreams.has(socket.id)) {
+      liveStreams.delete(socket.id);
+      broadcastLiveRooms();
+    }
 
     // Remove from queue if they were searching
     const qi = queue.findIndex(p => p.socketId === socket.id);

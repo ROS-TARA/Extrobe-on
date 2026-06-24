@@ -157,7 +157,7 @@ function Toast({ message, visible, isErr }) {
 }
 
 /* ── SECTION: Account — wired to real user data ── */
-function AccountSection({ data, onChange, onSave, saving }) {
+function AccountSection({ data, onChange, onSave, saving, pwForm, onPwChange, onPwSave, pwSaving, pwErr, pwOk }) {
   return (
     <div style={{ animation:"slideIn 0.3s both" }}>
       <SHead icon="👤" title="Account" sub="// your identity on StrangerPlay" />
@@ -206,10 +206,18 @@ function AccountSection({ data, onChange, onSave, saving }) {
       <div style={{ marginBottom:18 }}>
         <label style={{ fontSize:11, color:DS.ash, letterSpacing:1, textTransform:"uppercase", display:"block", marginBottom:10 }}>Change Password</label>
         <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-          <input className="s-input" type="password" placeholder="current password" />
-          <input className="s-input" type="password" placeholder="new password (min 8 chars)" />
-          <input className="s-input" type="password" placeholder="confirm new password" />
+          <input className="s-input" type="password" placeholder="current password"
+            value={pwForm.current} onChange={e => onPwChange("current", e.target.value)} />
+          <input className="s-input" type="password" placeholder="new password (min 8 chars)"
+            value={pwForm.next} onChange={e => onPwChange("next", e.target.value)} />
+          <input className="s-input" type="password" placeholder="confirm new password"
+            value={pwForm.confirm} onChange={e => onPwChange("confirm", e.target.value)} />
         </div>
+        {pwErr && <div style={{ fontSize:11, color:DS.live, marginTop:8 }}>{pwErr}</div>}
+        {pwOk && <div style={{ fontSize:11, color:DS.signal, marginTop:8 }}>Password updated.</div>}
+        <button className="s-save" style={{ marginTop:10, padding:"9px 18px", fontSize:13 }} onClick={onPwSave} disabled={pwSaving}>
+          {pwSaving ? "Updating..." : "Update password"}
+        </button>
         <div style={{ fontSize:11, color:DS.ash, marginTop:8 }}>leave blank to keep current password</div>
       </div>
 
@@ -467,6 +475,41 @@ export default function Settings({ onNavigate, user, onUserUpdate }) {
   const [toast, setToast] = useState({ visible:false, message:"", isErr:false });
   const toastTimer = useRef(null);
 
+  // Change Password — separate from the main Save Changes button since it
+  // hits a different route (/api/auth/change-password, requires current pw)
+  const [pwForm, setPwForm] = useState({ current: "", next: "", confirm: "" });
+  const [pwSaving, setPwSaving] = useState(false);
+  const [pwErr, setPwErr] = useState("");
+  const [pwOk, setPwOk] = useState(false);
+
+  function onPwChange(field, value) {
+    setPwForm(p => ({ ...p, [field]: value }));
+    setPwErr(""); setPwOk(false);
+  }
+
+  async function handlePwSave() {
+    if (!pwForm.current)            { setPwErr("enter your current password"); return; }
+    if (pwForm.next.length < 8)     { setPwErr("new password needs 8+ characters"); return; }
+    if (pwForm.next !== pwForm.confirm) { setPwErr("new passwords don't match"); return; }
+
+    setPwSaving(true); setPwErr(""); setPwOk(false);
+    try {
+      const token = localStorage.getItem("sp_token");
+      const res = await fetch(`${API}/api/auth/change-password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+        body: JSON.stringify({ currentPassword: pwForm.current, newPassword: pwForm.next }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setPwErr(data.error || "couldn't update password"); setPwSaving(false); return; }
+      setPwOk(true);
+      setPwForm({ current: "", next: "", confirm: "" });
+    } catch {
+      setPwErr("can't reach server");
+    }
+    setPwSaving(false);
+  }
+
   // API URL from .env — same pattern as LoginSignup
   const API = import.meta.env.VITE_API_URL || "https://extrobe-on.onrender.com";
 
@@ -552,9 +595,11 @@ export default function Settings({ onNavigate, user, onUserUpdate }) {
       const data = await res.json();
       if (!res.ok) { showToast(data.error || "Save failed", true); setSaving(false); return; }
 
-      // Update localStorage with new user data
+      // Use the SERVER's response as truth, not the locally typed values —
+      // now that the backend actually validates/persists username+email,
+      // this guarantees localStorage never shows something Mongo rejected.
       const saved = JSON.parse(localStorage.getItem("sp_user") || "{}");
-      const updated = { ...saved, username:account.username, email:account.email, bio:account.bio, country:account.country };
+      const updated = { ...saved, ...data };
       localStorage.setItem("sp_user", JSON.stringify(updated));
 
       // Tell parent to update its `user` state — fixes nav username display instantly
@@ -641,7 +686,8 @@ export default function Settings({ onNavigate, user, onUserUpdate }) {
           {/* Content */}
           <div className="s-content" style={{ flex:1, minWidth:0, paddingLeft:8 }}>
             <div style={{ background:DS.surface, border:`1px solid ${DS.rim}`, borderRadius:18, padding:"28px 24px" }}>
-              {activeSection==="account"       && <AccountSection       data={account}        onChange={(k,v)=>setAccount(p=>({...p,[k]:v}))}        onSave={handleSave} saving={saving} />}
+              {activeSection==="account"       && <AccountSection       data={account}        onChange={(k,v)=>setAccount(p=>({...p,[k]:v}))}        onSave={handleSave} saving={saving}
+                pwForm={pwForm} onPwChange={onPwChange} onPwSave={handlePwSave} pwSaving={pwSaving} pwErr={pwErr} pwOk={pwOk} />}
               {activeSection==="privacy"       && <PrivacySection       data={privacy}        onChange={(k,v)=>setPrivacy(p=>({...p,[k]:v}))}        onSave={handleSave} saving={saving} />}
               {activeSection==="notifications" && <NotificationsSection data={notifications}  onChange={(k,v)=>setNotifications(p=>({...p,[k]:v}))}  onSave={handleSave} saving={saving} />}
               {activeSection==="appearance"    && <AppearanceSection    data={appearance}     onChange={(k,v)=>setAppearance(p=>({...p,[k]:v}))}     onSave={handleSave} saving={saving} />}
