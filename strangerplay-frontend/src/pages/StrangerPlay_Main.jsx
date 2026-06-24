@@ -454,11 +454,12 @@ function LBRow({ rank, name, flag, pts, wins, isMe, delay }) {
    WEBRTC HOOK — unchanged logic, cleaner
 ────────────────────────────────────────── */
 function useWebRTC() {
-  const localRef   = useRef(null);
-  const remoteRef  = useRef(null);   // stranger's video element
-  const pcRef      = useRef(null);   // RTCPeerConnection
-  const pendingICE = useRef([]);     // ICE candidates queued before remote desc is set
-  const streamRef  = useRef(null);   // ref copy of stream so closures always see it
+  const localRef         = useRef(null);
+  const remoteRef        = useRef(null);  // stranger's video element
+  const remoteStreamRef  = useRef(null);  // holds the remote MediaStream — survives conditional rendering
+  const pcRef            = useRef(null);  // RTCPeerConnection
+  const pendingICE       = useRef([]);    // ICE candidates queued before remote desc is set
+  const streamRef        = useRef(null);  // ref copy of stream so closures always see it
 
   const [stream,          setStream]          = useState(null);
   const [remoteConnected, setRemoteConnected] = useState(false);
@@ -538,8 +539,12 @@ function useWebRTC() {
       streamRef.current.getTracks().forEach(t => pc.addTrack(t, streamRef.current));
     }
 
-    // Remote tracks arrive → attach to the stranger's <video> element
+    // Remote tracks arrive → attach to the stranger's <video> element.
+    // CRITICAL: also store in remoteStreamRef because the <video> element is
+    // conditionally rendered (only shows after remoteConnected=true).
+    // Without the ref, srcObject gets assigned to null and the video stays black.
     pc.ontrack = ({ streams: [rs] }) => {
+      remoteStreamRef.current = rs;           // store it — ref callback will pick this up
       if (remoteRef.current) {
         remoteRef.current.srcObject = rs;
         remoteRef.current.play().catch(() => {});
@@ -601,6 +606,7 @@ function useWebRTC() {
     if (pcRef.current) { pcRef.current.close(); pcRef.current = null; }
     setRemoteConnected(false);
     pendingICE.current = [];
+    remoteStreamRef.current = null;
     if (remoteRef.current) remoteRef.current.srcObject = null;
   }
 
@@ -609,7 +615,7 @@ function useWebRTC() {
   }, [stream]);
 
   return {
-    localRef, remoteRef,
+    localRef, remoteRef, remoteStreamRef,
     stream, remoteConnected,
     camErr, muted, camOff,
     startCamera, stopCamera, toggleMute, toggleCam,
@@ -830,7 +836,7 @@ function GoLivePage({ user, onNavigate, webrtc }) {
                 position: "relative",
               }}>
                 {webrtc.stream
-                  ? <video ref={webrtc.localRef} autoPlay muted playsInline style={{ width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)" }} />
+                  ? <video ref={el => { webrtc.localRef.current = el; if (el && webrtc.stream) { el.srcObject = webrtc.stream; el.play().catch(() => {}); } }} autoPlay muted playsInline style={{ width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)" }} />
                   : (
                     <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12 }}>
                       <span style={{ fontSize: 36 }}>📷</span>
@@ -853,7 +859,7 @@ function GoLivePage({ user, onNavigate, webrtc }) {
                 position: "relative", margin: "0 auto",
               }}>
                 {webrtc.stream
-                  ? <video ref={webrtc.localRef} autoPlay muted playsInline style={{ width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)" }} />
+                  ? <video ref={el => { webrtc.localRef.current = el; if (el && webrtc.stream) { el.srcObject = webrtc.stream; el.play().catch(() => {}); } }} autoPlay muted playsInline style={{ width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)" }} />
                   : (
                     <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10 }}>
                       <span style={{ fontSize: 28 }}>📷</span>
@@ -1492,7 +1498,9 @@ export default function StrangerPlay() {
                   borderRadius: 14, overflow: "hidden",
                   border: `1px solid ${DS.signal}44`, background: DS.surface2, position: "relative",
                 }}>
-                  <video ref={webrtc.localRef} autoPlay muted playsInline
+                  <video
+                    ref={el => { webrtc.localRef.current = el; if (el && webrtc.stream) { el.srcObject = webrtc.stream; el.play().catch(() => {}); } }}
+                    autoPlay muted playsInline
                     style={{ width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)", display: "block" }} />
                   <div style={{ position: "absolute", bottom: 8, left: 8 }}>
                     <span className="sp-live-badge"><span className="sp-live-dot" />PREVIEW</span>
@@ -1575,152 +1583,227 @@ export default function StrangerPlay() {
               */}
 
               {/* ── TOP HALF — STRANGER ── */}
-              <div style={{ flex: 1, position: "relative", background: "#111", overflow: "hidden", borderBottom: `1px solid rgba(255,255,255,0.08)` }}>
+              <div style={{ flex: 1, position: "relative", background: DS.void, overflow: "hidden" }}>
                 {webrtc.remoteConnected ? (
+                  /*
+                    WHY REF CALLBACK NOT useRef directly:
+                    This video element is conditionally rendered — it doesn't exist until
+                    remoteConnected=true. But pc.ontrack fires BEFORE this element mounts.
+                    If we use ref={webrtc.remoteRef}, srcObject was already assigned to null.
+                    The ref callback fires on mount and immediately picks up remoteStreamRef,
+                    which was stored in ontrack even though the element wasn't ready yet.
+                  */
                   <video
-                    ref={webrtc.remoteRef}
+                    ref={el => {
+                      webrtc.remoteRef.current = el;
+                      if (el && webrtc.remoteStreamRef.current) {
+                        el.srcObject = webrtc.remoteStreamRef.current;
+                        el.play().catch(() => {});
+                      }
+                    }}
                     autoPlay playsInline
                     style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
                   />
                 ) : (
-                  <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, background: "#0a0a0c" }}>
+                  <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16, background: DS.void }}>
                     {!opponentLeft ? (
                       <>
-                        <div style={{ width: 36, height: 36, borderRadius: "50%", border: `2px solid ${DS.signal}`, borderTopColor: "transparent", animation: "sp-spin 1s linear infinite" }} />
-                        <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: DS.ash, letterSpacing: 2 }}>CONNECTING</div>
-                        <div style={{ fontSize: 10, color: DS.ghost, maxWidth: 180, textAlign: "center", lineHeight: 1.5 }}>
-                          Takes up to 10s on mobile or different networks
+                        {/* Animated scan ring — matches the searching ring design language */}
+                        <div style={{ position: "relative", width: 64, height: 64 }}>
+                          <div style={{ position: "absolute", inset: 0, borderRadius: "50%", border: `2px solid transparent`, borderTopColor: DS.signal, animation: "sp-spin 1s linear infinite" }} />
+                          <div style={{ position: "absolute", inset: 10, borderRadius: "50%", border: `1px solid transparent`, borderTopColor: DS.ice, animation: "sp-spin 1.5s linear infinite reverse" }} />
+                          <div style={{ position: "absolute", inset: 20, borderRadius: "50%", background: DS.surface, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                            <span style={{ fontSize: 14 }}>{matchInfo.opponent?.flag || "🌍"}</span>
+                          </div>
+                        </div>
+                        <div style={{ textAlign: "center" }}>
+                          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: DS.signal, letterSpacing: 3, textTransform: "uppercase", marginBottom: 6 }}>CONNECTING</div>
+                          <div style={{ fontSize: 11, color: DS.ghost, lineHeight: 1.6 }}>
+                            {matchInfo.opponent?.username || "stranger"} · up to 10s on different networks
+                          </div>
                         </div>
                       </>
                     ) : (
                       <>
-                        <div style={{ fontSize: 40 }}>👋</div>
-                        <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: DS.live, letterSpacing: 2 }}>STRANGER LEFT</div>
+                        <div style={{ fontFamily: "'Fraunces', serif", fontStyle: "italic", fontSize: 28, color: DS.ash }}>They left.</div>
+                        <div style={{ fontSize: 11, color: DS.ghost, fontFamily: "'JetBrains Mono', monospace" }}>tap NEXT for another</div>
                       </>
                     )}
                   </div>
                 )}
 
-                {/* Stranger name tag — top left */}
-                <div style={{ position: "absolute", top: 12, left: 12, zIndex: 5 }}>
-                  <div style={{ background: "rgba(0,0,0,0.6)", backdropFilter: "blur(8px)", borderRadius: 8, padding: "5px 10px", display: "flex", alignItems: "center", gap: 6 }}>
-                    <span style={{ fontSize: 14 }}>{matchInfo.opponent?.flag || "🌍"}</span>
-                    <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: "#fff" }}>
+                {/* Stranger credential — top left, ticket-stub style */}
+                <div style={{ position: "absolute", top: 14, left: 14, zIndex: 5 }}>
+                  <div style={{
+                    background: "rgba(13,11,8,0.75)", backdropFilter: "blur(12px)",
+                    border: `1px solid ${DS.rim}`, padding: "5px 12px",
+                    display: "flex", alignItems: "center", gap: 7,
+                  }}>
+                    <span style={{ fontSize: 13 }}>{matchInfo.opponent?.flag || "🌍"}</span>
+                    <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, color: DS.plat, letterSpacing: 0.3 }}>
                       {matchInfo.opponent?.username || "stranger"}
                     </span>
                     {webrtc.remoteConnected && (
-                      <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#4ade80", boxShadow: "0 0 6px #4ade80", flexShrink: 0 }} />
+                      <span style={{ width: 5, height: 5, borderRadius: "50%", background: DS.signal, boxShadow: `0 0 8px ${DS.signal}`, flexShrink: 0, animation: "sp-signal 2s infinite" }} />
                     )}
                   </div>
                 </div>
 
-                {/* STRANGER label — top right */}
-                <div style={{ position: "absolute", top: 12, right: 12, zIndex: 5 }}>
-                  <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, color: "rgba(255,255,255,0.35)", letterSpacing: 2 }}>STRANGER</span>
+                {/* Points on the line — top right */}
+                <div style={{ position: "absolute", top: 14, right: 14, zIndex: 5 }}>
+                  <div style={{
+                    background: "rgba(13,11,8,0.75)", backdropFilter: "blur(12px)",
+                    border: `1px dashed ${DS.rim}`, padding: "4px 10px",
+                    fontFamily: "'JetBrains Mono', monospace", fontSize: 9.5, color: DS.ash, letterSpacing: 1.5,
+                  }}>STRANGER</div>
+                </div>
+              </div>
+
+              {/* ── DIVIDER — the tear line between the two halves ── */}
+              <div style={{
+                height: 1, flexShrink: 0, background: DS.rim,
+                boxShadow: `0 0 12px 1px ${DS.signal}18`,
+                position: "relative", zIndex: 6,
+              }}>
+                {/* Center dot — like a perforation hole on a ticket */}
+                <div style={{
+                  position: "absolute", left: "50%", top: "50%",
+                  transform: "translate(-50%,-50%)",
+                  width: 28, height: 28, borderRadius: "50%",
+                  background: DS.void, border: `1px solid ${DS.rim}`,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                }}>
+                  <div style={{ width: 6, height: 6, borderRadius: "50%", background: DS.signal }} />
                 </div>
               </div>
 
               {/* ── BOTTOM HALF — YOU ── */}
-              <div style={{ flex: 1, position: "relative", background: "#0a0a0c", overflow: "hidden" }}>
+              <div style={{ flex: 1, position: "relative", background: DS.surface2, overflow: "hidden" }}>
+                {/*
+                  LOCAL VIDEO REF CALLBACK:
+                  When matchPhase switches idle→connected, React unmounts the idle
+                  <video> and mounts this new one. stream state hasn't changed, so
+                  useEffect([stream]) does NOT re-fire — new element never gets
+                  srcObject. The ref callback fires on every mount and immediately
+                  assigns the stream. This is the real fix for the black camera.
+                */}
                 <video
-                  ref={webrtc.localRef}
+                  ref={el => { webrtc.localRef.current = el; if (el && webrtc.stream) { el.srcObject = webrtc.stream; el.play().catch(() => {}); } }}
                   autoPlay muted playsInline
                   style={{ width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)", display: "block" }}
                 />
 
-                {/* YOU label — bottom right */}
-                <div style={{ position: "absolute", top: 12, right: 12, zIndex: 5 }}>
-                  <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, color: "rgba(255,255,255,0.35)", letterSpacing: 2 }}>YOU</span>
+                {/* Camera off overlay */}
+                {webrtc.camOff && (
+                  <div style={{ position: "absolute", inset: 0, background: DS.surface2, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <span style={{ fontSize: 28, color: DS.ghost }}>📷</span>
+                  </div>
+                )}
+
+                {/* YOU label — top left */}
+                <div style={{ position: "absolute", top: 14, left: 14, zIndex: 5 }}>
+                  <div style={{
+                    background: "rgba(13,11,8,0.75)", backdropFilter: "blur(12px)",
+                    border: `1px dashed ${DS.rim}`, padding: "4px 10px",
+                    fontFamily: "'JetBrains Mono', monospace", fontSize: 9.5, color: DS.ash, letterSpacing: 1.5,
+                  }}>YOU</div>
                 </div>
 
-                {/* ── CONTROLS — bottom of the lower half ── */}
-                {/*
-                  Controls live INSIDE the lower half div — not fixed to the
-                  screen bottom — so they never overlap the bottom nav (which
-                  is hidden during the call anyway). No safe-area conflict.
+                {/* ── BOTTOM OVERLAY — game pills + controls ──
+                    Lives INSIDE the bottom half, not fixed to screen bottom.
+                    This is what prevents the bottom nav from covering it —
+                    the nav is hidden during calls (see nav condition), and
+                    these controls fill the freed space naturally.
                 */}
                 <div style={{
-                  position: "absolute", bottom: 0, left: 0, right: 0,
-                  padding: "12px 16px 16px",
-                  background: "linear-gradient(to top, rgba(0,0,0,0.85) 0%, transparent 100%)",
-                  zIndex: 10,
+                  position: "absolute", bottom: 0, left: 0, right: 0, zIndex: 10,
+                  padding: "0 16px 16px",
+                  background: "linear-gradient(to top, rgba(13,11,8,0.95) 0%, rgba(13,11,8,0.6) 60%, transparent 100%)",
                 }}>
 
-                  {/* Game pills — pick together */}
-                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
-                    {[
-                      { id: "dontlaugh",     label: "😐 Don't Laugh" },
-                      { id: "vibecheck",     label: "🎭 Vibe Check" },
-                      { id: "mirrorme",      label: "🪞 Mirror Me" },
-                      { id: "hottake",       label: "🌶️ Hot Take" },
-                      { id: "echo",          label: "🔊 Echo" },
-                      { id: "finishmystory", label: "📖 Story" },
-                    ].map(g => (
-                      <button
-                        key={g.id}
-                        onClick={() => socket.emit("proposeGame", { roomId: matchInfo.roomId, game: g.id })}
-                        style={{
-                          background: "rgba(255,255,255,0.1)", backdropFilter: "blur(6px)",
-                          border: "1px solid rgba(255,255,255,0.15)",
-                          borderRadius: 20, padding: "5px 10px",
-                          color: "#fff", fontSize: 10,
-                          fontFamily: "'JetBrains Mono', monospace",
-                          cursor: "pointer", whiteSpace: "nowrap",
-                        }}
-                      >
-                        {g.label}
-                      </button>
-                    ))}
+                  {/* Game pills — horizontal scroll on small screens */}
+                  <div style={{ marginBottom: 12, overflowX: "auto", paddingBottom: 2 }}>
+                    <div style={{ display: "flex", gap: 7, width: "max-content" }}>
+                      {[
+                        { id: "dontlaugh",     emoji: "😐", label: "Don't Laugh" },
+                        { id: "vibecheck",     emoji: "🎭", label: "Vibe Check"  },
+                        { id: "mirrorme",      emoji: "🪞", label: "Mirror Me"   },
+                        { id: "hottake",       emoji: "🌶️", label: "Hot Take"    },
+                        { id: "echo",          emoji: "🔊", label: "Echo"        },
+                        { id: "finishmystory", emoji: "📖", label: "Story"       },
+                      ].map(g => (
+                        <button
+                          key={g.id}
+                          onClick={() => socket.emit("proposeGame", { roomId: matchInfo.roomId, game: g.id })}
+                          style={{
+                            background: DS.surface,
+                            border: `1px dashed ${DS.rimHov}`,
+                            padding: "6px 13px",
+                            color: DS.plat, fontSize: 11,
+                            fontFamily: "'JetBrains Mono', monospace", letterSpacing: 0.3,
+                            cursor: "pointer", whiteSpace: "nowrap",
+                            transition: "border-color 0.15s, color 0.15s",
+                          }}
+                          onMouseEnter={e => { e.currentTarget.style.borderColor = DS.signal; e.currentTarget.style.color = DS.signal; }}
+                          onMouseLeave={e => { e.currentTarget.style.borderColor = DS.rimHov; e.currentTarget.style.color = DS.plat; }}
+                        >
+                          {g.emoji} {g.label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
 
-                  {/* Action buttons */}
+                  {/* Controls row */}
                   <div style={{ display: "flex", alignItems: "center", gap: 10, justifyContent: "center" }}>
 
                     {/* Mute */}
-                    <button onClick={webrtc.toggleMute} style={{
-                      width: 44, height: 44, borderRadius: "50%",
-                      background: webrtc.muted ? DS.live : "rgba(255,255,255,0.15)",
-                      border: "none", cursor: "pointer", fontSize: 17, flexShrink: 0,
+                    <button onClick={webrtc.toggleMute} title={webrtc.muted ? "Unmute" : "Mute"} style={{
+                      width: 42, height: 42,
+                      background: webrtc.muted ? DS.live : DS.surface,
+                      border: `1px solid ${webrtc.muted ? DS.live : DS.rim}`,
+                      cursor: "pointer", fontSize: 16, flexShrink: 0,
+                      display: "flex", alignItems: "center", justifyContent: "center",
                     }}>
                       {webrtc.muted ? "🔇" : "🎤"}
                     </button>
 
                     {/* Cam */}
-                    <button onClick={webrtc.toggleCam} style={{
-                      width: 44, height: 44, borderRadius: "50%",
-                      background: webrtc.camOff ? DS.live : "rgba(255,255,255,0.15)",
-                      border: "none", cursor: "pointer", fontSize: 17, flexShrink: 0,
+                    <button onClick={webrtc.toggleCam} title={webrtc.camOff ? "Show camera" : "Hide camera"} style={{
+                      width: 42, height: 42,
+                      background: webrtc.camOff ? DS.live : DS.surface,
+                      border: `1px solid ${webrtc.camOff ? DS.live : DS.rim}`,
+                      cursor: "pointer", fontSize: 16, flexShrink: 0,
+                      display: "flex", alignItems: "center", justifyContent: "center",
                     }}>
                       {webrtc.camOff ? "🚫" : "📷"}
                     </button>
 
                     {/*
-                      NEXT — the main action button.
-                      Green + arrow = move to next stranger.
-                      NOT a red hang-up. The user skips to a new random person.
-                      This is the core Omegle interaction — "next" is the verb.
+                      NEXT — brass/signal color. This is the primary call action.
+                      Pressing NEXT = skip to a new random stranger immediately.
+                      NOT a red hang-up. The verb is "next", not "end".
                     */}
                     <button
                       onClick={() => {
                         socket.emit("match:leave", { roomId: matchInfo.roomId });
                         webrtc.closePeer();
-                        // Go straight back into search — don't go idle
-                        startSearch();
+                        startSearch(); // straight back into matchmaking
                       }}
                       style={{
-                        height: 52, padding: "0 28px", borderRadius: 26,
-                        background: DS.signal,
-                        border: "none", cursor: "pointer",
-                        fontFamily: "'Fraunces', serif", fontWeight: 700,
-                        fontSize: 15, color: DS.void,
-                        boxShadow: `0 0 20px ${DS.signal}44`,
-                        display: "flex", alignItems: "center", gap: 7, flexShrink: 0,
+                        height: 42, padding: "0 28px",
+                        background: DS.signal, border: "none", cursor: "pointer",
+                        fontFamily: "'Fraunces', serif", fontWeight: 700, fontStyle: "italic",
+                        fontSize: 14, color: DS.void, letterSpacing: 0.3,
+                        flexShrink: 0, boxShadow: `4px 4px 0 0 ${DS.signal}40`,
+                        transition: "transform 0.15s, box-shadow 0.15s",
                       }}
+                      onMouseEnter={e => { e.currentTarget.style.transform = "translate(-2px,-2px)"; e.currentTarget.style.boxShadow = `6px 6px 0 0 ${DS.signal}55`; }}
+                      onMouseLeave={e => { e.currentTarget.style.transform = ""; e.currentTarget.style.boxShadow = `4px 4px 0 0 ${DS.signal}40`; }}
                     >
                       NEXT →
                     </button>
 
-                    {/* End call — secondary, smaller, no glow */}
+                    {/* End — small, ghost style, secondary action */}
                     <button
                       onClick={() => {
                         socket.emit("match:leave", { roomId: matchInfo.roomId });
@@ -1729,14 +1812,16 @@ export default function StrangerPlay() {
                         setMatchInfo(null);
                         setOpponentLeft(false);
                       }}
-                      style={{
-                        width: 44, height: 44, borderRadius: "50%",
-                        background: "rgba(255,255,255,0.08)",
-                        border: `1px solid rgba(255,255,255,0.12)`,
-                        cursor: "pointer", fontSize: 17, flexShrink: 0,
-                        color: DS.ash,
-                      }}
                       title="End call"
+                      style={{
+                        width: 42, height: 42, background: DS.surface,
+                        border: `1px solid ${DS.rim}`, cursor: "pointer",
+                        fontSize: 15, color: DS.ash, flexShrink: 0,
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        transition: "border-color 0.15s, color 0.15s",
+                      }}
+                      onMouseEnter={e => { e.currentTarget.style.borderColor = DS.live; e.currentTarget.style.color = DS.live; }}
+                      onMouseLeave={e => { e.currentTarget.style.borderColor = DS.rim; e.currentTarget.style.color = DS.ash; }}
                     >
                       ✕
                     </button>
@@ -1875,9 +1960,12 @@ export default function StrangerPlay() {
       ) : null}
 
       {/* ══════════════════════════════
-          BOTTOM NAV — mobile, main pages only
+          BOTTOM NAV — main pages only.
+          HIDDEN during active calls (matchPhase === "connected") — the call UI
+          takes the full screen and the controls live inside the bottom half.
+          Showing the nav during a call would bury the NEXT button behind it.
       ══════════════════════════════ */}
-      {["home", "play", "ranks", "watchlive", "golive"].includes(page) && (
+      {["home", "play", "ranks", "watchlive", "golive"].includes(page) && !(page === "play" && matchPhase === "connected") && (
         <nav style={{
           position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 300,
           display: "flex", justifyContent: "space-around", alignItems: "center",
