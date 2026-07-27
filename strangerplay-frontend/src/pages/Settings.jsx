@@ -1,459 +1,277 @@
-import { useState, useRef, useEffect } from "react";
-
-/*
-  Settings.jsx v2 — wired to real user data
-  
-  Changes from v1:
-  - Accepts `user` prop from StrangerPlay_Main (the logged-in user object)
-  - Accepts `onUserUpdate` callback to sync updated user back to parent
-  - Account section pre-fills from user object (username, email, bio, country)
-  - Save actually calls PATCH /api/user/settings with JWT token
-  - Loads VITE_API_URL from .env the same way LoginSignup does
-  - All other sections (Privacy, Notifications, Audio, etc.) unchanged
-  - Danger zone: reset/delete call real endpoints
-*/
+import { useState } from "react";
 
 const DS = {
-  void:    "#080809",
-  surface: "#0f1012",
-  surface2:"#131519",
-  rim:     "#1a1c1f",
-  rimHov:  "#252830",
-  plat:    "#e8e6e0",
-  ash:     "#4a4d56",
-  ghost:   "#2a2d33",
-  signal:  "#e8ff47",
-  live:    "#ff3d57",
-  ice:     "#47c4ff",
-  gold:    "#ffb319",
+  void:"var(--sp-void)", surface:"var(--sp-surface)", surface2:"var(--sp-surface2)",
+  rim:"var(--sp-rim)", plat:"var(--sp-plat)", ash:"var(--sp-ash)", ghost:"var(--sp-ghost)",
+  signal:"var(--sp-signal)", live:"var(--sp-live)", ice:"var(--sp-ice)", gold:"var(--sp-gold)",
 };
 
 const css = `
-  @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
-
-  *, *::before, *::after { box-sizing:border-box; margin:0; padding:0; }
-  body { background:${DS.void}; color:${DS.plat}; font-family:'Inter',sans-serif; min-height:100vh; overflow-x:hidden; }
-
-  @keyframes fadeUp   { from{opacity:0;transform:translateY(18px)} to{opacity:1;transform:translateY(0)} }
-  @keyframes slideIn  { from{opacity:0;transform:translateX(-8px)} to{opacity:1;transform:translateX(0)} }
-  @keyframes toastIn  { from{opacity:0;transform:translateY(20px) scale(.95)} to{opacity:1;transform:translateY(0) scale(1)} }
-  @keyframes toastOut { to{opacity:0;transform:translateY(20px) scale(.95)} }
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Inter', sans-serif; background: var(--sp-void); color: var(--sp-plat); transition: background 0.2s, color 0.2s; }
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-thumb { background: var(--sp-rim); border-radius: 4px; }
+  @keyframes sp-enter { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:translateY(0)} }
   @keyframes sp-spin  { to{transform:rotate(360deg)} }
-  @keyframes dangerPulse { 0%,100%{border-color:${DS.live}33} 50%{border-color:${DS.live}88} }
-
+  input, select, textarea { font-family: inherit; }
   .s-input {
-    background:${DS.surface}; border:1px solid ${DS.rim}; border-radius:10px;
-    color:${DS.plat}; font-family:'Inter',sans-serif; font-size:14px;
-    padding:11px 14px; width:100%; outline:none; transition:border 0.2s, box-shadow 0.2s;
+    background: var(--sp-surface2); border: 1.5px solid var(--sp-rim);
+    border-radius: 8px; padding: 10px 13px; color: var(--sp-plat);
+    font-size: 14px; outline: none; width: 100%; transition: border-color 0.15s;
   }
-  .s-input:focus { border-color:${DS.signal}55; box-shadow:0 0 0 3px ${DS.signal}0a; }
-  .s-input::placeholder { color:${DS.ghost}; }
-
-  .s-select {
-    background:${DS.surface}; border:1px solid ${DS.rim}; border-radius:10px;
-    color:${DS.plat}; font-family:'Inter',sans-serif; font-size:14px;
-    padding:11px 14px; width:100%; outline:none; cursor:pointer; appearance:none;
-    transition:border 0.2s;
+  .s-input:focus { border-color: var(--sp-signal); }
+  .s-input::placeholder { color: var(--sp-ghost); }
+  .s-btn {
+    background: var(--sp-signal); color: #fff; border: none;
+    border-radius: 8px; padding: 10px 20px; font-size: 14px;
+    font-weight: 600; cursor: pointer; transition: filter 0.15s;
   }
-  .s-select:focus { border-color:${DS.signal}55; }
-  .s-select option { background:${DS.surface2}; }
-
+  .s-btn:hover:not(:disabled) { filter: brightness(1.1); }
+  .s-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .s-btn-ghost {
+    background: transparent; border: 1px solid var(--sp-rim);
+    border-radius: 8px; padding: 9px 18px; color: var(--sp-ash);
+    font-size: 14px; font-weight: 500; cursor: pointer; transition: background 0.15s, color 0.15s;
+  }
+  .s-btn-ghost:hover { background: var(--sp-surface2); color: var(--sp-plat); }
+  .s-toggle { position: relative; display: inline-block; width: 44px; height: 24px; flex-shrink: 0; }
+  .s-toggle input { opacity: 0; width: 0; height: 0; }
+  .s-slider {
+    position: absolute; cursor: pointer; inset: 0;
+    background: var(--sp-rim); border-radius: 24px; transition: background 0.2s;
+  }
+  .s-slider::before {
+    content: ''; position: absolute; height: 18px; width: 18px;
+    left: 3px; bottom: 3px; background: #fff; border-radius: 50%;
+    transition: transform 0.2s;
+  }
+  .s-toggle input:checked + .s-slider { background: var(--sp-signal); }
+  .s-toggle input:checked + .s-slider::before { transform: translateX(20px); }
   .s-nav-item {
-    cursor:pointer; border:none; background:none;
-    width:100%; text-align:left; transition:all 0.18s; border-radius:10px;
-    display:flex; align-items:center; gap:10; padding:11px 14px;
+    display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+    border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 500;
+    color: var(--sp-ash); transition: background 0.12s, color 0.12s;
+    border: none; background: transparent; width: 100%; text-align: left;
   }
-  .s-nav-item:hover { background:${DS.surface} !important; }
-
-  .s-save { background:${DS.signal}; color:${DS.void}; border:none; border-radius:10px; font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:15px; letter-spacing:0.5px; padding:12px 28px; cursor:pointer; transition:filter 0.12s, transform 0.12s; }
-  .s-save:hover { filter:brightness(1.08); transform:translateY(-1px); }
-  .s-save:disabled { opacity:0.5; cursor:not-allowed; transform:none; }
-
-  .s-ghost { background:transparent; color:${DS.ash}; border:1px solid ${DS.rim}; border-radius:10px; font-family:'Inter',sans-serif; font-weight:500; font-size:13px; padding:9px 18px; cursor:pointer; transition:all 0.15s; }
-  .s-ghost:hover { border-color:${DS.rimHov}; color:${DS.plat}; }
-
-  .s-danger-btn { background:${DS.live}0a; border:1px solid ${DS.live}33; border-radius:10px; color:${DS.live}; font-family:'Inter',sans-serif; font-weight:600; font-size:13px; padding:10px 20px; cursor:pointer; transition:all 0.18s; }
-  .s-danger-btn:hover { background:${DS.live}18; border-color:${DS.live}66; }
-
-  .s-divider { border:none; border-top:1px solid ${DS.rim}; margin:22px 0; }
-
-  ::-webkit-scrollbar { width:3px; }
-  ::-webkit-scrollbar-track { background:transparent; }
-  ::-webkit-scrollbar-thumb { background:${DS.rim}; border-radius:99px; }
-
-  @media (max-width:768px) {
-    .s-layout  { flex-direction:column !important; }
-    .s-sidebar { flex-direction:row !important; flex-wrap:wrap; gap:6px !important; border-right:none !important; border-bottom:1px solid ${DS.rim} !important; padding-bottom:12px !important; padding-right:0 !important; position:static !important; }
-    .s-sidebar .s-nav-item { flex:1; min-width:70px; justify-content:center !important; padding:8px 10px !important; }
-    .s-nav-label { display:none !important; }
-    .s-content  { padding-left:0 !important; }
+  .s-nav-item:hover  { background: var(--sp-surface2); color: var(--sp-plat); }
+  .s-nav-item.active { background: var(--sp-signal); color: #fff; }
+  .s-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 13px 0; border-bottom: 1px solid var(--sp-rim); }
+  .s-row:last-child { border-bottom: none; }
+  .s-danger-box { border: 1px solid var(--sp-live); border-radius: 10px; padding: 16px; }
+  .s-danger-btn {
+    background: transparent; border: 1px solid var(--sp-live); border-radius: 8px;
+    padding: 8px 16px; color: var(--sp-live); font-size: 13px; font-weight: 500;
+    cursor: pointer; transition: background 0.15s, color 0.15s;
   }
+  .s-danger-btn:hover { background: var(--sp-live); color: #fff; }
+  .s-danger-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .hide-mob { display: block; }
+  .show-mob { display: none; }
+  @media (max-width: 640px) { .hide-mob { display: none !important; } .show-mob { display: flex !important; } }
 `;
 
-/* ── Toggle ── */
-function Toggle({ value, onChange, color = DS.signal, disabled = false }) {
+function Toggle({ value, onChange }) {
   return (
-    <div onClick={() => !disabled && onChange(!value)} style={{
-      width:44, height:24, borderRadius:12, flexShrink:0,
-      background: value ? color : DS.ghost,
-      border:`1px solid ${value ? color+"66" : DS.rim}`,
-      position:"relative", cursor: disabled?"not-allowed":"pointer",
-      transition:"background 0.22s, border 0.22s", opacity: disabled?0.4:1,
-      boxShadow: value ? `0 0 10px ${color}44` : "none",
-    }}>
-      <div style={{
-        position:"absolute", top:2, left: value?22:2, width:18, height:18,
-        borderRadius:"50%", background: value?"#0a0a0a":"#555",
-        transition:"left 0.22s, background 0.22s", boxShadow:"0 1px 3px rgba(0,0,0,0.4)",
-      }} />
+    <label className="s-toggle">
+      <input type="checkbox" checked={!!value} onChange={e => onChange(e.target.checked)} />
+      <span className="s-slider" />
+    </label>
+  );
+}
+
+function SectionTitle({ title, sub }) {
+  return (
+    <div style={{ marginBottom: 20 }}>
+      <h2 style={{ fontSize: 17, fontWeight: 700, color: DS.plat }}>{title}</h2>
+      {sub && <p style={{ fontSize: 13, color: DS.ash, marginTop: 4 }}>{sub}</p>}
     </div>
   );
 }
 
-/* ── Row: label + control inline ── */
-function Row({ label, desc, children, danger = false }) {
+function Field({ label, value, onChange, type = "text", placeholder = "" }) {
   return (
-    <div style={{ display:"flex", justifyContent:"space-between", alignItems: desc?"flex-start":"center", gap:16, marginBottom:20 }}>
+    <div style={{ marginBottom: 14 }}>
+      <label style={{ fontSize: 12, fontWeight: 600, color: DS.ash, textTransform: "uppercase", letterSpacing: "0.5px", display: "block", marginBottom: 6 }}>{label}</label>
+      <input className="s-input" type={type} value={value} placeholder={placeholder} onChange={e => onChange(e.target.value)} />
+    </div>
+  );
+}
+
+function ToggleRow({ label, sub, value, onChange }) {
+  return (
+    <div className="s-row">
       <div>
-        <div style={{ fontSize:13, fontWeight:500, color: danger?DS.live:DS.plat, marginBottom: desc?3:0 }}>{label}</div>
-        {desc && <div style={{ fontSize:11, color:DS.ash, lineHeight:1.4, maxWidth:360 }}>{desc}</div>}
+        <div style={{ fontSize: 14, fontWeight: 500, color: DS.plat }}>{label}</div>
+        {sub && <div style={{ fontSize: 12, color: DS.ash, marginTop: 2 }}>{sub}</div>}
       </div>
-      {children}
+      <Toggle value={value} onChange={onChange} />
     </div>
   );
 }
 
-/* ── Section header ── */
-function SHead({ icon, title, sub }) {
+/* ── Account ── */
+function AccountSection({ data, onChange, onSave, saving }) {
   return (
-    <div style={{ marginBottom:28 }}>
-      <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:6 }}>
-        <span style={{ fontSize:20 }}>{icon}</span>
-        <h2 style={{ fontFamily:"'Space Grotesk',sans-serif", fontWeight:700, fontSize:22, color:DS.plat, letterSpacing:-0.3 }}>{title}</h2>
-      </div>
-      {sub && <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:DS.ash, letterSpacing:2 }}>{sub}</div>}
-      <hr className="s-divider" style={{ marginTop:14 }} />
-    </div>
-  );
-}
-
-/* ── Toast ── */
-function Toast({ message, visible, isErr }) {
-  return (
-    <div style={{
-      position:"fixed", bottom:80, left:"50%", transform:"translateX(-50%)",
-      background: isErr ? DS.live+"14" : DS.signal+"14",
-      border:`1px solid ${isErr ? DS.live+"44" : DS.signal+"44"}`,
-      borderRadius:10, padding:"12px 24px", zIndex:1000,
-      fontFamily:"'JetBrains Mono',monospace", fontSize:12,
-      color: isErr ? DS.live : DS.signal,
-      backdropFilter:"blur(12px)",
-      animation: visible ? "toastIn 0.3s both" : "toastOut 0.3s both forwards",
-      display:"flex", alignItems:"center", gap:10, pointerEvents:"none", whiteSpace:"nowrap",
-    }}>
-      {isErr ? "⚠" : "✓"} {message}
-    </div>
-  );
-}
-
-/* ── SECTION: Account — wired to real user data ── */
-function AccountSection({ data, onChange, onSave, saving, pwForm, onPwChange, onPwSave, pwSaving, pwErr, pwOk }) {
-  return (
-    <div style={{ animation:"slideIn 0.3s both" }}>
-      <SHead icon="👤" title="Account" sub="// your identity on StrangerPlay" />
-
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:18 }}>
-        <div>
-          <label style={{ fontSize:11, color:DS.ash, letterSpacing:1, textTransform:"uppercase", display:"block", marginBottom:7 }}>Username</label>
-          <input className="s-input" value={data.username || ""} onChange={e => onChange("username", e.target.value.toLowerCase().replace(/\s/g,"_"))} placeholder="your_handle" />
-          <div style={{ fontSize:10, color:DS.ghost, marginTop:4 }}>only lowercase letters, numbers, underscores</div>
-        </div>
-        <div>
-          <label style={{ fontSize:11, color:DS.ash, letterSpacing:1, textTransform:"uppercase", display:"block", marginBottom:7 }}>Email</label>
-          <input className="s-input" type="email" value={data.email || ""} onChange={e => onChange("email", e.target.value)} placeholder="you@email.com" />
-        </div>
-      </div>
-
-      <div style={{ marginBottom:18 }}>
-        <label style={{ fontSize:11, color:DS.ash, letterSpacing:1, textTransform:"uppercase", display:"block", marginBottom:7 }}>Bio</label>
-        <textarea className="s-input" value={data.bio || ""} onChange={e => onChange("bio", e.target.value.slice(0,80))} placeholder="say something real" rows={3} style={{ resize:"vertical", minHeight:72 }} />
-        <div style={{ fontSize:10, color: (data.bio||"").length >= 70 ? DS.gold : DS.ghost, marginTop:4, textAlign:"right" }}>{(data.bio||"").length} / 80</div>
-      </div>
-
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:18 }}>
-        <div>
-          <label style={{ fontSize:11, color:DS.ash, letterSpacing:1, textTransform:"uppercase", display:"block", marginBottom:7 }}>Country</label>
-          <div style={{ position:"relative" }}>
-            <select className="s-select" value={data.country || "Nepal"} onChange={e => onChange("country", e.target.value)}>
-              {["Nepal","USA","India","UK","Brazil","Germany","Japan","Korea","Nigeria","France","China","Australia","Canada","Mexico"].map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
-            <span style={{ position:"absolute", right:12, top:"50%", transform:"translateY(-50%)", color:DS.ash, pointerEvents:"none", fontSize:11 }}>▾</span>
-          </div>
-        </div>
-        <div>
-          <label style={{ fontSize:11, color:DS.ash, letterSpacing:1, textTransform:"uppercase", display:"block", marginBottom:7 }}>Language</label>
-          <div style={{ position:"relative" }}>
-            <select className="s-select" value={data.language || "en"} onChange={e => onChange("language", e.target.value)}>
-              {[["en","English"],["ne","Nepali"],["hi","Hindi"],["es","Spanish"],["fr","French"],["de","German"],["ja","Japanese"],["ko","Korean"]].map(([v,l]) => <option key={v} value={v}>{l}</option>)}
-            </select>
-            <span style={{ position:"absolute", right:12, top:"50%", transform:"translateY(-50%)", color:DS.ash, pointerEvents:"none", fontSize:11 }}>▾</span>
-          </div>
-        </div>
-      </div>
-
-      <hr className="s-divider" />
-
-      <div style={{ marginBottom:18 }}>
-        <label style={{ fontSize:11, color:DS.ash, letterSpacing:1, textTransform:"uppercase", display:"block", marginBottom:10 }}>Change Password</label>
-        <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-          <input className="s-input" type="password" placeholder="current password"
-            value={pwForm.current} onChange={e => onPwChange("current", e.target.value)} />
-          <input className="s-input" type="password" placeholder="new password (min 8 chars)"
-            value={pwForm.next} onChange={e => onPwChange("next", e.target.value)} />
-          <input className="s-input" type="password" placeholder="confirm new password"
-            value={pwForm.confirm} onChange={e => onPwChange("confirm", e.target.value)} />
-        </div>
-        {pwErr && <div style={{ fontSize:11, color:DS.live, marginTop:8 }}>{pwErr}</div>}
-        {pwOk && <div style={{ fontSize:11, color:DS.signal, marginTop:8 }}>Password updated.</div>}
-        <button className="s-save" style={{ marginTop:10, padding:"9px 18px", fontSize:13 }} onClick={onPwSave} disabled={pwSaving}>
-          {pwSaving ? "Updating..." : "Update password"}
-        </button>
-        <div style={{ fontSize:11, color:DS.ash, marginTop:8 }}>leave blank to keep current password</div>
-      </div>
-
-      <div style={{ display:"flex", justifyContent:"flex-end", paddingTop:20, borderTop:`1px solid ${DS.rim}` }}>
-        <button className="s-save" onClick={onSave} disabled={saving}>
-          {saving ? "Saving..." : "Save Changes"}
-        </button>
+    <div>
+      <SectionTitle title="Account" />
+      <Field label="Display Name" value={data.name}     onChange={v => onChange("name", v)}     placeholder="Your name" />
+      <Field label="Username"     value={data.username} onChange={v => onChange("username", v)} placeholder="username" />
+      <Field label="Bio"          value={data.bio}      onChange={v => onChange("bio", v)}      placeholder="Short bio" />
+      <Field label="Email"        value={data.email}    onChange={v => onChange("email", v)}    type="email" />
+      <div style={{ marginTop: 8 }}>
+        <button className="s-btn" onClick={onSave} disabled={saving}>{saving ? "Saving…" : "Save changes"}</button>
       </div>
     </div>
   );
 }
 
-/* ── SECTION: Privacy ── */
-function PrivacySection({ data, onChange, onSave, saving }) {
-  const rows = [
-    { key:"profilePublic",   label:"Public profile",       desc:"Anyone can view your stats and history" },
-    { key:"showOnline",      label:"Show online status",   desc:"Friends can see when you're active" },
-    { key:"allowChallenges", label:"Allow challenges",     desc:"Friends can challenge you directly" },
-    { key:"allowSpectators", label:"Allow spectators",     desc:"Others can watch your live games" },
-    { key:"showCountry",     label:"Show country flag",    desc:"Your flag appears next to your name in-game" },
-    { key:"allowClips",      label:"Allow crowd clipping", desc:"Spectators can clip and share your moments" },
-    { key:"showHistory",     label:"Show match history",   desc:"Make your game history visible on your profile" },
-  ];
+/* ── Password ── */
+function PasswordSection({ API }) {
+  const [form, setForm] = useState({ current: "", next: "", confirm: "" });
+  const [err,  setErr]  = useState("");
+  const [ok,   setOk]   = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  async function submit() {
+    setErr(""); setOk(false);
+    if (!form.current) return setErr("Enter your current password");
+    if (form.next.length < 8) return setErr("New password must be at least 8 characters");
+    if (form.next !== form.confirm) return setErr("Passwords don't match");
+    setBusy(true);
+    try {
+      const token = localStorage.getItem("sp_token");
+      const res = await fetch(`${API}/api/auth/change-password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ currentPassword: form.current, newPassword: form.next }),
+      });
+      const d = await res.json();
+      if (!res.ok) setErr(d.error || "Wrong current password");
+      else { setOk(true); setForm({ current: "", next: "", confirm: "" }); }
+    } catch { setErr("Can't reach server"); }
+    setBusy(false);
+  }
+
   return (
-    <div style={{ animation:"slideIn 0.3s both" }}>
-      <SHead icon="🛡️" title="Privacy" sub="// who sees what" />
-      {rows.map(r => (
-        <Row key={r.key} label={r.label} desc={r.desc}>
-          <Toggle value={data[r.key]} onChange={v => onChange(r.key, v)} />
-        </Row>
-      ))}
-      <div style={{ display:"flex", justifyContent:"flex-end", paddingTop:20, borderTop:`1px solid ${DS.rim}` }}>
-        <button className="s-save" onClick={onSave} disabled={saving}>{saving?"Saving...":"Save"}</button>
-      </div>
+    <div>
+      <SectionTitle title="Password" />
+      <Field label="Current password" value={form.current} onChange={v => setForm(p => ({ ...p, current: v }))} type="password" />
+      <Field label="New password"     value={form.next}    onChange={v => setForm(p => ({ ...p, next: v }))}    type="password" />
+      <Field label="Confirm new"      value={form.confirm} onChange={v => setForm(p => ({ ...p, confirm: v }))} type="password" />
+      {err && <div style={{ fontSize: 13, color: DS.live, marginBottom: 10 }}>{err}</div>}
+      {ok  && <div style={{ fontSize: 13, color: DS.ice,  marginBottom: 10 }}>Password updated.</div>}
+      <button className="s-btn" onClick={submit} disabled={busy}>{busy ? "Updating…" : "Update password"}</button>
     </div>
   );
 }
 
-/* ── SECTION: Notifications ── */
-function NotificationsSection({ data, onChange, onSave, saving }) {
-  const rows = [
-    { key:"matchFound",     label:"Match found",          desc:"Ping when a game partner is found",           color:DS.signal },
-    { key:"friendOnline",   label:"Friend online",        desc:"Notify when a friend comes online",           color:DS.ice    },
-    { key:"pointMilestone", label:"Point milestone",      desc:"Alert when you're close to a reward tier",    color:DS.gold   },
-    { key:"newReward",      label:"New reward unlocked",  desc:"Celebrate when you hit a threshold",          color:DS.gold   },
-    { key:"weeklyRecap",    label:"Weekly recap",         desc:"Your wins, losses, and stats every Sunday",   color:DS.ice    },
-    { key:"crowdReactions", label:"Crowd reactions",      desc:"See when the crowd reacts to your game",      color:DS.live   },
-    { key:"marketing",      label:"Updates & news",       desc:"Occasional product updates (rare)",           color:DS.ash    },
-  ];
+/* ── Appearance — THE theme toggle ── */
+function AppearanceSection({ theme, onThemeChange }) {
   return (
-    <div style={{ animation:"slideIn 0.3s both" }}>
-      <SHead icon="🔔" title="Notifications" sub="// what's allowed to interrupt you" />
-      {rows.map(r => (
-        <Row key={r.key} label={r.label} desc={r.desc}>
-          <Toggle value={data[r.key]} onChange={v => onChange(r.key, v)} color={r.color} />
-        </Row>
-      ))}
-      <div style={{ display:"flex", justifyContent:"flex-end", paddingTop:20, borderTop:`1px solid ${DS.rim}` }}>
-        <button className="s-save" onClick={onSave} disabled={saving}>{saving?"Saving...":"Save"}</button>
-      </div>
-    </div>
-  );
-}
+    <div>
+      <SectionTitle title="Appearance" sub="Choose how StrangerPlay looks for you. Changes apply everywhere instantly." />
 
-/* ── SECTION: Appearance ── */
-function AppearanceSection({ data, onChange, onSave, saving }) {
-  const accents = [DS.signal, DS.ice, DS.live, DS.gold, "#a78bfa", "#f472b6", "#00f5a0", "#ff9f43"];
-  return (
-    <div style={{ animation:"slideIn 0.3s both" }}>
-      <SHead icon="🎨" title="Appearance" sub="// make it yours" />
-
-      <div style={{ marginBottom:24 }}>
-        <div style={{ fontSize:11, color:DS.ash, letterSpacing:1, textTransform:"uppercase", marginBottom:12 }}>Accent color</div>
-        <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
-          {accents.map(c => (
-            <button key={c} onClick={() => onChange("accentColor", c)} style={{
-              width:34, height:34, borderRadius:"50%", background:c, outline:"none",
-              border:`3px solid ${data.accentColor===c?"#fff":"transparent"}`,
-              cursor:"pointer", boxShadow: data.accentColor===c?`0 0 14px ${c}99`:"none",
-              transition:"all 0.18s",
-            }} />
-          ))}
-        </div>
-        <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:DS.ash, marginTop:8 }}>
-          active: <span style={{ color:data.accentColor }}>{data.accentColor}</span>
-        </div>
-      </div>
-
-      <hr className="s-divider" />
-      <Row label="Reduce motion" desc="Fewer animations — better for focus or accessibility">
-        <Toggle value={data.reducedMotion} onChange={v => onChange("reducedMotion", v)} />
-      </Row>
-      <Row label="Compact mode" desc="Tighter spacing on cards and panels">
-        <Toggle value={data.compactMode} onChange={v => onChange("compactMode", v)} />
-      </Row>
-      <hr className="s-divider" />
-
-      <div style={{ marginBottom:20 }}>
-        <div style={{ fontSize:11, color:DS.ash, letterSpacing:1, textTransform:"uppercase", marginBottom:12 }}>Theme</div>
-        <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
-          {[["dark","🌑 Dark"],["amoled","⚫ AMOLED"],["dim","🌒 Dim"]].map(([v,l]) => (
-            <button key={v} onClick={() => onChange("theme", v)} style={{
-              padding:"10px 18px", borderRadius:10, fontSize:13,
-              background: data.theme===v ? DS.signal+"14" : DS.surface,
-              border:`1px solid ${data.theme===v ? DS.signal+"55" : DS.rim}`,
-              color: data.theme===v ? DS.signal : DS.ash,
-              cursor:"pointer", fontFamily:"'Inter',sans-serif", fontWeight:500, transition:"all 0.18s",
-            }}>{l}</button>
-          ))}
-        </div>
-      </div>
-
-      <div style={{ display:"flex", justifyContent:"flex-end", paddingTop:20, borderTop:`1px solid ${DS.rim}` }}>
-        <button className="s-save" onClick={onSave} disabled={saving}>{saving?"Saving...":"Save"}</button>
-      </div>
-    </div>
-  );
-}
-
-/* ── SECTION: Audio ── */
-function AudioSection({ data, onChange, onSave, saving }) {
-  const rows = [
-    { key:"soundEffects", label:"Sound effects",    desc:"In-game sounds, button clicks, reactions" },
-    { key:"crowdNoise",   label:"Crowd noise",       desc:"Ambient crowd audio during live matches" },
-    { key:"matchPing",    label:"Match found ping",  desc:"Audio alert when a game starts" },
-  ];
-  return (
-    <div style={{ animation:"slideIn 0.3s both" }}>
-      <SHead icon="🔊" title="Audio" sub="// how loud do you want this" />
-      <div style={{ marginBottom:22 }}>
-        <div style={{ fontSize:11, color:DS.ash, letterSpacing:1, textTransform:"uppercase", marginBottom:12 }}>Master volume</div>
-        <div style={{ display:"flex", alignItems:"center", gap:12 }}>
-          <span style={{ fontSize:12, color:DS.ash }}>🔇</span>
-          <input type="range" min={0} max={100} value={data.volume} onChange={e => onChange("volume", Number(e.target.value))} style={{ flex:1, accentColor:DS.signal, cursor:"pointer" }} />
-          <span style={{ fontSize:12, color:DS.ash }}>🔊</span>
-          <span style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:DS.ash, width:32, textAlign:"right" }}>{data.volume}%</span>
-        </div>
-      </div>
-      <hr className="s-divider" />
-      {rows.map(r => (
-        <Row key={r.key} label={r.label} desc={r.desc}>
-          <Toggle value={data[r.key]} onChange={v => onChange(r.key, v)} />
-        </Row>
-      ))}
-      <div style={{ display:"flex", justifyContent:"flex-end", paddingTop:20, borderTop:`1px solid ${DS.rim}` }}>
-        <button className="s-save" onClick={onSave} disabled={saving}>{saving?"Saving...":"Save"}</button>
-      </div>
-    </div>
-  );
-}
-
-/* ── SECTION: Connected Accounts ── */
-function ConnectedSection() {
-  const [connected, setConnected] = useState({ google:false, twitter:false, discord:false });
-  return (
-    <div style={{ animation:"slideIn 0.3s both" }}>
-      <SHead icon="🔗" title="Connected Accounts" sub="// link your other identities" />
-      {[
-        { key:"google",  icon:"G",  label:"Google",  color:"#ea4335" },
-        { key:"twitter", icon:"𝕏",  label:"X / Twitter", color:"#1da1f2" },
-        { key:"discord", icon:"D",  label:"Discord", color:"#5865f2" },
-      ].map(a => (
-        <Row key={a.key} label={a.label} desc={connected[a.key] ? "Connected" : "Not connected"}>
+      <div style={{ fontSize: 12, fontWeight: 600, color: DS.ash, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 10 }}>Theme</div>
+      <div style={{ display: "flex", gap: 10, marginBottom: 24 }}>
+        {[["dark", "🌙", "Dark"], ["light", "☀️", "Light"]].map(([val, icon, label]) => (
           <button
-            onClick={() => setConnected(prev => ({ ...prev, [a.key]: !prev[a.key] }))}
+            key={val}
+            onClick={() => onThemeChange(val)}
             style={{
-              background: connected[a.key] ? DS.live+"10" : DS.surface,
-              border:`1px solid ${connected[a.key] ? DS.live+"44" : DS.rim}`,
-              borderRadius:9, padding:"7px 16px", cursor:"pointer",
-              color: connected[a.key] ? DS.live : DS.ash,
-              fontFamily:"'Inter',sans-serif", fontWeight:500, fontSize:12,
-              transition:"all 0.18s",
+              flex: 1, padding: "14px 12px", borderRadius: 10, cursor: "pointer",
+              border: `2px solid ${theme === val ? "var(--sp-signal)" : "var(--sp-rim)"}`,
+              background: theme === val ? "var(--sp-signal)" : "var(--sp-surface2)",
+              color: theme === val ? "#fff" : DS.ash,
+              fontSize: 14, fontWeight: 600, transition: "all 0.15s",
+              display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
             }}
           >
-            {connected[a.key] ? "Disconnect" : "Connect"}
+            <span style={{ fontSize: 18 }}>{icon}</span> {label}
           </button>
-        </Row>
-      ))}
+        ))}
+      </div>
     </div>
   );
 }
 
-/* ── SECTION: Danger Zone ── */
-function DangerSection({ username, onToast }) {
-  const [confirmReset, setConfirmReset] = useState(false);
+/* ── Privacy ── */
+function PrivacySection({ data, onChange, onSave, saving }) {
+  return (
+    <div>
+      <SectionTitle title="Privacy" sub="Control what others can see about you." />
+      <ToggleRow label="Show on leaderboard"  sub="Others can see your rank and points"  value={data.showOnLeaderboard} onChange={v => onChange("showOnLeaderboard", v)} />
+      <ToggleRow label="Allow crowd watching" sub="Let users spectate your live calls"   value={data.allowCrowdWatch}   onChange={v => onChange("allowCrowdWatch", v)} />
+      <ToggleRow label="Show country on profile" sub="Flag and country visible to others" value={data.showCountry}       onChange={v => onChange("showCountry", v)} />
+      <div style={{ marginTop: 16 }}>
+        <button className="s-btn" onClick={onSave} disabled={saving}>{saving ? "Saving…" : "Save"}</button>
+      </div>
+    </div>
+  );
+}
+
+/* ── Notifications ── */
+function NotificationsSection({ data, onChange, onSave, saving }) {
+  return (
+    <div>
+      <SectionTitle title="Notifications" sub="Choose what you want to be notified about." />
+      <ToggleRow label="Match found"    sub="When a stranger is matched to you"     value={data.matchFound}   onChange={v => onChange("matchFound", v)} />
+      <ToggleRow label="New follower"   sub="When someone follows your profile"     value={data.newFollower}  onChange={v => onChange("newFollower", v)} />
+      <ToggleRow label="Game results"   sub="Point changes and win/loss updates"    value={data.gameResult}   onChange={v => onChange("gameResult", v)} />
+      <ToggleRow label="Weekly summary" sub="How you did this week (email)"         value={data.weeklyDigest} onChange={v => onChange("weeklyDigest", v)} />
+      <div style={{ marginTop: 16 }}>
+        <button className="s-btn" onClick={onSave} disabled={saving}>{saving ? "Saving…" : "Save"}</button>
+      </div>
+    </div>
+  );
+}
+
+/* ── Danger ── */
+function DangerSection({ API, onNavigate }) {
+  const [confirmReset,  setConfirmReset]  = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [deleteInput, setDeleteInput] = useState("");
-  const API = import.meta.env.VITE_API_URL || "http://localhost:3001";
+  const [deleteInput,   setDeleteInput]   = useState("");
+  const token = localStorage.getItem("sp_token");
 
-  const doReset = async () => {
-    try {
-      const token = localStorage.getItem("sp_token");
-      await fetch(`${API}/api/user/reset-stats`, { method:"POST", headers:{ "Authorization":`Bearer ${token}` } });
-      setConfirmReset(false);
-      onToast("Stats reset. Starting from 0.", false);
-    } catch { onToast("Server error — try again", true); }
-  };
+  async function resetStats() {
+    await fetch(`${API}/api/user/reset-stats`, { method: "POST", headers: { Authorization: `Bearer ${token}` } });
+    setConfirmReset(false);
+    alert("Stats reset.");
+  }
 
-  const doDelete = async () => {
-    if (deleteInput !== username) { onToast("Username doesn't match", true); return; }
-    try {
-      const token = localStorage.getItem("sp_token");
-      await fetch(`${API}/api/user/delete`, { method:"DELETE", headers:{ "Authorization":`Bearer ${token}` } });
-      localStorage.removeItem("sp_token"); localStorage.removeItem("sp_user");
-      window.location.reload();
-    } catch { onToast("Server error — try again", true); }
-  };
+  async function deleteAccount() {
+    if (deleteInput !== "DELETE") return;
+    await fetch(`${API}/api/user/delete`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
+    localStorage.clear();
+    window.location.reload();
+  }
 
   return (
-    <div style={{ animation:"slideIn 0.3s both" }}>
-      <SHead icon="⚠️" title="Danger Zone" sub="// you probably shouldn't be here" />
+    <div>
+      <SectionTitle title="Danger Zone" />
 
-      {/* Reset stats */}
-      <div style={{ background:DS.live+"05", border:`1px solid ${DS.live}22`, borderRadius:14, padding:"20px 22px", marginBottom:14, animation: confirmReset?"dangerPulse 1.5s infinite":"none" }}>
-        <div style={{ fontSize:14, fontWeight:600, color:DS.live, marginBottom:4 }}>Reset all stats</div>
-        <div style={{ fontSize:12, color:DS.ash, marginBottom:16, lineHeight:1.5 }}>Clears your points, match history, and rank. Account stays. Cannot be undone.</div>
+      <div className="s-danger-box" style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: DS.plat, marginBottom: 4 }}>Reset stats</div>
+        <div style={{ fontSize: 13, color: DS.ash, marginBottom: 12 }}>Wipes your points, wins, and match history. Cannot be undone.</div>
         {!confirmReset
           ? <button className="s-danger-btn" onClick={() => setConfirmReset(true)}>Reset my stats</button>
-          : <div style={{ display:"flex", gap:10 }}>
-              <button className="s-danger-btn" style={{ background:DS.live, color:"#fff", border:"none" }} onClick={doReset}>Yes, reset everything</button>
-              <button className="s-ghost" onClick={() => setConfirmReset(false)}>Cancel</button>
+          : <div style={{ display: "flex", gap: 8 }}>
+              <button className="s-danger-btn" onClick={resetStats}>Confirm reset</button>
+              <button className="s-btn-ghost" onClick={() => setConfirmReset(false)}>Cancel</button>
             </div>
         }
       </div>
 
-      {/* Delete account */}
-      <div style={{ background:DS.live+"05", border:`1px solid ${DS.live}22`, borderRadius:14, padding:"20px 22px", animation: confirmDelete?"dangerPulse 1.5s infinite":"none" }}>
-        <div style={{ fontSize:14, fontWeight:600, color:DS.live, marginBottom:4 }}>Delete account</div>
-        <div style={{ fontSize:12, color:DS.ash, marginBottom:16, lineHeight:1.5 }}>Permanently deletes your account, stats, badges, and everything. Truly gone.</div>
+      <div className="s-danger-box">
+        <div style={{ fontSize: 14, fontWeight: 600, color: DS.plat, marginBottom: 4 }}>Delete account</div>
+        <div style={{ fontSize: 13, color: DS.ash, marginBottom: 12 }}>Permanently deletes your account and all data. Type DELETE to confirm.</div>
         {!confirmDelete
           ? <button className="s-danger-btn" onClick={() => setConfirmDelete(true)}>Delete my account</button>
-          : <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-              <input className="s-input" placeholder={`type "${username}" to confirm`} value={deleteInput} onChange={e => setDeleteInput(e.target.value)} style={{ borderColor:DS.live+"44" }} />
-              <div style={{ display:"flex", gap:10 }}>
-                <button className="s-danger-btn" style={{ background:DS.live, color:"#fff", border:"none" }} onClick={doDelete}>Delete permanently</button>
-                <button className="s-ghost" onClick={() => { setConfirmDelete(false); setDeleteInput(""); }}>Cancel</button>
+          : <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <input className="s-input" placeholder="Type DELETE" value={deleteInput} onChange={e => setDeleteInput(e.target.value)} />
+              <div style={{ display: "flex", gap: 8 }}>
+                <button className="s-danger-btn" onClick={deleteAccount} disabled={deleteInput !== "DELETE"}>Delete account</button>
+                <button className="s-btn-ghost" onClick={() => { setConfirmDelete(false); setDeleteInput(""); }}>Cancel</button>
               </div>
             </div>
         }
@@ -462,244 +280,141 @@ function DangerSection({ username, onToast }) {
   );
 }
 
-/* ──────────────────────────────────────────
+/* ══════════════════════════════════════
    MAIN EXPORT
-   Props:
-     user          — user object from localStorage (set after login)
-     onNavigate    — goTo() from parent
-     onUserUpdate  — called with updated user after save (syncs parent state)
-────────────────────────────────────────── */
+   Props: onNavigate, user (safeUser), onUserUpdate
+══════════════════════════════════════ */
 export default function Settings({ onNavigate, user, onUserUpdate }) {
-  const [activeSection, setActiveSection] = useState("account");
-  const [saving, setSaving] = useState(false);
-  const [toast, setToast] = useState({ visible:false, message:"", isErr:false });
-  const toastTimer = useRef(null);
-
-  // Change Password — separate from the main Save Changes button since it
-  // hits a different route (/api/auth/change-password, requires current pw)
-  const [pwForm, setPwForm] = useState({ current: "", next: "", confirm: "" });
-  const [pwSaving, setPwSaving] = useState(false);
-  const [pwErr, setPwErr] = useState("");
-  const [pwOk, setPwOk] = useState(false);
-
-  function onPwChange(field, value) {
-    setPwForm(p => ({ ...p, [field]: value }));
-    setPwErr(""); setPwOk(false);
-  }
-
-  async function handlePwSave() {
-    if (!pwForm.current)            { setPwErr("enter your current password"); return; }
-    if (pwForm.next.length < 8)     { setPwErr("new password needs 8+ characters"); return; }
-    if (pwForm.next !== pwForm.confirm) { setPwErr("new passwords don't match"); return; }
-
-    setPwSaving(true); setPwErr(""); setPwOk(false);
-    try {
-      const token = localStorage.getItem("sp_token");
-      const res = await fetch(`${API}/api/auth/change-password`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
-        body: JSON.stringify({ currentPassword: pwForm.current, newPassword: pwForm.next }),
-      });
-      const data = await res.json();
-      if (!res.ok) { setPwErr(data.error || "couldn't update password"); setPwSaving(false); return; }
-      setPwOk(true);
-      setPwForm({ current: "", next: "", confirm: "" });
-    } catch {
-      setPwErr("can't reach server");
-    }
-    setPwSaving(false);
-  }
-
-  // API URL from .env — same pattern as LoginSignup
   const API = import.meta.env.VITE_API_URL || "https://extrobe-on.onrender.com";
 
-  /*
-    ACCOUNT state — seeded from the real user object.
-    When user logs in, this pre-fills with their actual data.
-    Without this, Settings always showed hardcoded "raj_np".
-  */
-  const [account, setAccount] = useState({
-    username: user?.username || "",
-    email:    user?.email    || "",
-    bio:      user?.bio      || "",
-    country:  user?.country  || "Nepal",
-    language: user?.language || "en",
-  });
+  const [section,  setSection]  = useState("account");
+  const [saving,   setSaving]   = useState(false);
+  const [toast,    setToast]    = useState("");
+  const [toastErr, setToastErr] = useState(false);
 
-  // Resync if user prop changes (e.g. after a reload)
-  useEffect(() => {
-    if (user) {
-      setAccount({
-        username: user.username || "",
-        email:    user.email    || "",
-        bio:      user.bio      || "",
-        country:  user.country  || "Nepal",
-        language: user.language || "en",
-      });
-    }
-  }, [user]);
-
-  // Non-account settings — these don't come from server yet, just localStorage
-  const [privacy, setPrivacy] = useState({
-    profilePublic:true, showOnline:true, allowChallenges:true,
-    allowSpectators:true, showCountry:true, allowClips:true, showHistory:false,
-  });
-  const [notifications, setNotifications] = useState({
-    matchFound:true, friendOnline:true, pointMilestone:true,
-    newReward:true, weeklyRecap:false, crowdReactions:false, marketing:false,
-  });
-  const [appearance, setAppearance] = useState({
-    accentColor:DS.signal, reducedMotion:false, compactMode:false, theme:"dark",
-  });
-  const [audio, setAudio] = useState({
-    soundEffects:true, crowdNoise:true, matchPing:true, volume:80,
-  });
-
-  function showToast(msg, isErr = false) {
-    clearTimeout(toastTimer.current);
-    setToast({ visible:true, message:msg, isErr });
-    toastTimer.current = setTimeout(() => setToast(t => ({...t, visible:false})), 3000);
+  // Theme — reads saved value, calls window.applyTheme() to change globally
+  const [theme, setTheme] = useState(() => localStorage.getItem("sp_theme") || "dark");
+  function handleThemeChange(val) {
+    setTheme(val);
+    if (window.applyTheme) window.applyTheme(val);
   }
 
-  useEffect(() => () => clearTimeout(toastTimer.current), []);
+  const [account, setAccount] = useState({
+    name:     user?.name     || "",
+    username: user?.username || "",
+    bio:      user?.bio      || "",
+    email:    user?.email    || "",
+  });
+  const [privacy, setPrivacy] = useState({
+    showOnLeaderboard: user?.privacy?.showOnLeaderboard ?? true,
+    allowCrowdWatch:   user?.privacy?.allowCrowdWatch   ?? true,
+    showCountry:       user?.privacy?.showCountry       ?? true,
+  });
+  const [notifications, setNotifications] = useState({
+    matchFound:   user?.notifications?.matchFound   ?? true,
+    newFollower:  user?.notifications?.newFollower  ?? true,
+    gameResult:   user?.notifications?.gameResult   ?? true,
+    weeklyDigest: user?.notifications?.weeklyDigest ?? false,
+  });
 
-  /*
-    SAVE to server — calls PATCH /api/user/settings
-    Requires JWT token from localStorage.
-    Server should update the user document in MongoDB.
-    After save, we update localStorage and tell parent (onUserUpdate).
-  */
-  const handleSave = async () => {
-    if (!user) { showToast("You're not logged in", true); return; }
+  function showToast(msg, err = false) {
+    setToast(msg); setToastErr(err);
+    setTimeout(() => setToast(""), 2800);
+  }
+
+  async function handleSave() {
     setSaving(true);
     try {
       const token = localStorage.getItem("sp_token");
       const res = await fetch(`${API}/api/user/settings`, {
-        method:"PATCH",
-        headers:{
-          "Content-Type":"application/json",
-          "Authorization":`Bearer ${token}`,
-        },
-        body:JSON.stringify({
-          username:    account.username,
-          email:       account.email,
-          bio:         account.bio,
-          country:     account.country,
-          language:    account.language,
-          privacy,
-          notifications,
-          appearance,
-          audio,
-        }),
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ account, privacy, notifications }),
       });
-      const data = await res.json();
-      if (!res.ok) { showToast(data.error || "Save failed", true); setSaving(false); return; }
-
-      // Use the SERVER's response as truth, not the locally typed values —
-      // now that the backend actually validates/persists username+email,
-      // this guarantees localStorage never shows something Mongo rejected.
-      const saved = JSON.parse(localStorage.getItem("sp_user") || "{}");
-      const updated = { ...saved, ...data };
-      localStorage.setItem("sp_user", JSON.stringify(updated));
-
-      // Tell parent to update its `user` state — fixes nav username display instantly
-      if (onUserUpdate) onUserUpdate(updated);
-
-      showToast("Settings saved");
-    } catch(e) {
-      // If server is down, save locally and tell user
-      showToast("Saved locally — server unreachable", true);
-    }
+      const d = await res.json();
+      if (!res.ok) showToast(d.error || "Save failed", true);
+      else { onUserUpdate?.(d.user); showToast("Saved"); }
+    } catch { showToast("Can't reach server", true); }
     setSaving(false);
-  };
+  }
 
-  const goBack = () => onNavigate ? onNavigate("home") : window.history.back();
-
-  const NAV_ITEMS = [
-    { id:"account",       icon:"👤", label:"Account"       },
-    { id:"privacy",       icon:"🛡️", label:"Privacy"       },
-    { id:"notifications", icon:"🔔", label:"Notifications" },
-    { id:"appearance",    icon:"🎨", label:"Appearance"    },
-    { id:"audio",         icon:"🔊", label:"Audio"         },
-    { id:"connected",     icon:"🔗", label:"Connected"     },
-    { id:"danger",        icon:"⚠️", label:"Danger"        },
+  const NAV = [
+    { id: "account",       icon: "👤", label: "Account"       },
+    { id: "password",      icon: "🔒", label: "Password"      },
+    { id: "appearance",    icon: "🎨", label: "Appearance"    },
+    { id: "privacy",       icon: "🛡️", label: "Privacy"       },
+    { id: "notifications", icon: "🔔", label: "Notifications" },
+    { id: "danger",        icon: "⚠️", label: "Danger Zone"   },
   ];
 
   return (
-    <div style={{ position:"relative", minHeight:"100vh", background:DS.void }}>
+    <>
       <style>{css}</style>
+      <div style={{ minHeight: "100dvh", background: DS.void, paddingTop: 56, paddingBottom: 80 }}>
+        <div style={{ maxWidth: 820, margin: "0 auto", padding: "0 clamp(12px,4vw,28px)" }}>
 
-      <div style={{ position:"relative", zIndex:1, maxWidth:1100, margin:"0 auto", padding:"clamp(80px,12vw,110px) clamp(16px,5vw,60px) 120px" }}>
-
-        {/* Back + header */}
-        <div style={{ marginBottom:36, animation:"fadeUp 0.45s both" }}>
-          <button className="s-ghost" style={{ padding:"7px 14px", marginBottom:24, fontSize:12 }} onClick={goBack}>← back</button>
-          <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:DS.ash, letterSpacing:4, textTransform:"uppercase", marginBottom:10 }}>
-            // the page nobody opens until something breaks
+          {/* Header */}
+          <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 24 }}>
+            <button className="s-btn-ghost" style={{ padding: "7px 13px", fontSize: 13 }} onClick={() => onNavigate?.("home")}>← Back</button>
+            <h1 style={{ fontSize: 20, fontWeight: 700, color: DS.plat }}>Settings</h1>
           </div>
-          <h1 style={{ fontFamily:"'Space Grotesk',sans-serif", fontWeight:700, fontSize:"clamp(40px,8vw,66px)", letterSpacing:-1, lineHeight:1, color:DS.plat }}>
-            Settings
-          </h1>
-          {/* Show current user identity at top */}
-          {user && (
-            <div style={{ display:"flex", alignItems:"center", gap:10, marginTop:14, padding:"10px 16px", background:DS.surface, border:`1px solid ${DS.rim}`, borderRadius:12, display:"inline-flex" }}>
-              <span style={{ fontSize:18 }}>🧑‍💻</span>
-              <span style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:13, color:DS.signal }}>{user.username}</span>
-              <span style={{ fontSize:12, color:DS.ash }}>·</span>
-              <span style={{ fontSize:12, color:DS.ash }}>{user.email}</span>
-            </div>
-          )}
-          {!user && (
-            <div style={{ marginTop:14, padding:"12px 16px", background:DS.live+"0a", border:`1px solid ${DS.live}33`, borderRadius:12, fontSize:13, color:DS.live }}>
-              ⚠ You're not signed in — settings won't save
-            </div>
-          )}
-        </div>
 
-        {/* Layout: sidebar + content */}
-        <div className="s-layout" style={{ display:"flex", gap:36, alignItems:"flex-start" }}>
+          <div style={{ display: "flex", gap: 18, alignItems: "flex-start" }}>
 
-          {/* Sidebar */}
-          <div className="s-sidebar" style={{ width:190, flexShrink:0, display:"flex", flexDirection:"column", gap:2, position:"sticky", top:100, borderRight:`1px solid ${DS.rim}`, paddingRight:20 }}>
-            {NAV_ITEMS.map(item => {
-              const active = activeSection === item.id;
-              const isDanger = item.id === "danger";
-              return (
-                <button key={item.id} className="s-nav-item" onClick={() => setActiveSection(item.id)} style={{
-                  background: active ? (isDanger?DS.live+"0a":DS.signal+"0a") : "transparent",
-                  color: active ? (isDanger?DS.live:DS.signal) : DS.ash,
-                  fontSize:13, fontWeight:500,
-                  borderLeft:`2px solid ${active?(isDanger?DS.live:DS.signal):"transparent"}`,
-                }}>
-                  <span style={{ fontSize:16 }}>{item.icon}</span>
-                  <span className="s-nav-label">{item.label}</span>
+            {/* Sidebar — desktop */}
+            <nav className="hide-mob" style={{
+              width: 190, flexShrink: 0,
+              background: DS.surface, border: `1px solid ${DS.rim}`,
+              borderRadius: 12, padding: 8,
+              position: "sticky", top: 70,
+            }}>
+              {NAV.map(n => (
+                <button key={n.id} className={`s-nav-item ${section === n.id ? "active" : ""}`} onClick={() => setSection(n.id)}>
+                  <span>{n.icon}</span> {n.label}
                 </button>
-              );
-            })}
-            <div style={{ marginTop:20, paddingTop:16, borderTop:`1px solid ${DS.rim}` }}>
-              <button className="s-save" onClick={handleSave} disabled={saving} style={{ width:"100%" }}>
-                {saving ? "Saving..." : "Save"}
-              </button>
-            </div>
-          </div>
+              ))}
+            </nav>
 
-          {/* Content */}
-          <div className="s-content" style={{ flex:1, minWidth:0, paddingLeft:8 }}>
-            <div style={{ background:DS.surface, border:`1px solid ${DS.rim}`, borderRadius:18, padding:"28px 24px" }}>
-              {activeSection==="account"       && <AccountSection       data={account}        onChange={(k,v)=>setAccount(p=>({...p,[k]:v}))}        onSave={handleSave} saving={saving}
-                pwForm={pwForm} onPwChange={onPwChange} onPwSave={handlePwSave} pwSaving={pwSaving} pwErr={pwErr} pwOk={pwOk} />}
-              {activeSection==="privacy"       && <PrivacySection       data={privacy}        onChange={(k,v)=>setPrivacy(p=>({...p,[k]:v}))}        onSave={handleSave} saving={saving} />}
-              {activeSection==="notifications" && <NotificationsSection data={notifications}  onChange={(k,v)=>setNotifications(p=>({...p,[k]:v}))}  onSave={handleSave} saving={saving} />}
-              {activeSection==="appearance"    && <AppearanceSection    data={appearance}     onChange={(k,v)=>setAppearance(p=>({...p,[k]:v}))}     onSave={handleSave} saving={saving} />}
-              {activeSection==="audio"         && <AudioSection         data={audio}          onChange={(k,v)=>setAudio(p=>({...p,[k]:v}))}          onSave={handleSave} saving={saving} />}
-              {activeSection==="connected"     && <ConnectedSection />}
-              {activeSection==="danger"        && <DangerSection        username={user?.username||"user"} onToast={showToast} />}
+            {/* Horizontal pill nav — mobile */}
+            <div className="show-mob" style={{ marginBottom: 14, overflowX: "auto", paddingBottom: 4, width: "100%" }}>
+              <div style={{ display: "flex", gap: 6, width: "max-content" }}>
+                {NAV.map(n => (
+                  <button key={n.id} onClick={() => setSection(n.id)} style={{
+                    padding: "7px 14px", borderRadius: 20, border: "none", cursor: "pointer",
+                    background: section === n.id ? "var(--sp-signal)" : "var(--sp-surface2)",
+                    color: section === n.id ? "#fff" : DS.ash,
+                    fontSize: 13, fontWeight: 500, whiteSpace: "nowrap",
+                  }}>{n.icon} {n.label}</button>
+                ))}
+              </div>
+            </div>
+
+            {/* Content */}
+            <div style={{
+              flex: 1,
+              background: DS.surface, border: `1px solid ${DS.rim}`,
+              borderRadius: 12, padding: "22px clamp(14px,4vw,26px)",
+            }}>
+              {section === "account"       && <AccountSection       data={account}       onChange={(k,v) => setAccount(p => ({ ...p, [k]: v }))}       onSave={handleSave} saving={saving} />}
+              {section === "password"      && <PasswordSection      API={API} />}
+              {section === "appearance"    && <AppearanceSection    theme={theme}        onThemeChange={handleThemeChange} />}
+              {section === "privacy"       && <PrivacySection       data={privacy}       onChange={(k,v) => setPrivacy(p => ({ ...p, [k]: v }))}       onSave={handleSave} saving={saving} />}
+              {section === "notifications" && <NotificationsSection data={notifications} onChange={(k,v) => setNotifications(p => ({ ...p, [k]: v }))} onSave={handleSave} saving={saving} />}
+              {section === "danger"        && <DangerSection        API={API} onNavigate={onNavigate} />}
             </div>
           </div>
         </div>
       </div>
 
-      {toast.message && <Toast message={toast.message} visible={toast.visible} isErr={toast.isErr} />}
-    </div>
+      {/* Toast */}
+      {toast && (
+        <div style={{
+          position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", zIndex: 9999,
+          background: toastErr ? "var(--sp-live)" : "var(--sp-ice)", color: "#fff",
+          padding: "10px 20px", borderRadius: 8, fontSize: 13, fontWeight: 600,
+          boxShadow: "0 4px 16px rgba(0,0,0,0.25)",
+        }}>{toast}</div>
+      )}
+    </>
   );
 }

@@ -33,48 +33,56 @@ function socketEmit(event, data) {
 /* ─────────────────────────────────────────────
    CONSTANTS
 ───────────────────────────────────────────── */
-const BG = `linear-gradient(to right,#141415 0%,#141415 12.5%,#181819 12.5%,#181819 25%,#1c1d1e 25%,#1c1d1e 37.5%,#212224 37.5%,#212224 50%,#262729 50%,#262729 62.5%,#2b2c2f 62.5%,#2b2c2f 75%,#303235 75%,#303235 87.5%,#36383b 87.5%,#36383b 100%)`;
+/* ═══════════════════════════════════════════════════════════════
+   DESIGN SYSTEM — shared with StrangerPlay_Main / GameSection via
+   CSS variables, so the dark/light toggle in Settings repaints
+   this file too, automatically, with zero extra wiring here.
+════════════════════════════════════════════════════════════════ */
+const DS = {
+  void:    "var(--sp-void)",
+  surface: "var(--sp-surface)",
+  surface2:"var(--sp-surface2)",
+  rim:     "var(--sp-rim)",
+  plat:    "var(--sp-plat)",
+  ash:     "var(--sp-ash)",
+  ghost:   "var(--sp-ghost)",
+  signal:  "var(--sp-signal)",
+  signalD: "var(--sp-signal)",
+  live:    "var(--sp-live)",
+  ice:     "var(--sp-ice)",
+  gold:    "var(--sp-gold)",
+};
+
+const BG = DS.void;
 
 const ROUND_DURATION  = 20;
 const VOTE_DURATION   = 5;
 const INTRO_DURATION  = 2000;
 const RESULT_DURATION = 3000;
 const TOTAL_ROUNDS    = 3;
-const FACE_INTERVAL   = 80;   // MediaPipe is heavier, 80ms is fine (~12fps detection)
+const FACE_INTERVAL   = 80;
 
 /*
   MEDIAPIPE FACE MESH
   468 facial landmarks — production quality, same as Google Meet.
   BlazeFace only gave us 6 landmarks. MediaPipe gives us exact lip geometry.
-  
-  Smile detection works on:
-    Upper lip center  → landmark 13
-    Lower lip center  → landmark 14
-    Left mouth corner → landmark 61
-    Right mouth corner→ landmark 291
-    Left eye outer    → landmark 33
-    Right eye outer   → landmark 263
-  
-  Mouth Aspect Ratio (MAR) = vertical mouth gap / horizontal mouth width
-  Neutral mouth MAR ≈ 0.0 – 0.1
-  Smile / open mouth MAR ≈ 0.3+
 */
-const SMILE_MAR_THRESHOLD = 0.28;  // tune lower = more sensitive, higher = less
+const SMILE_MAR_THRESHOLD = 0.28;
 
 const CDN_FACEMESH = "https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js";
 const CDN_CAMERA   = "https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js";
 const CDN_DRAWING  = "https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js";
 
 /* ─────────────────────────────────────────────
-   GAME MODE CONFIG
+   GAME MODE CONFIG — per-mode accent colors now use the Voltage palette
 ───────────────────────────────────────────── */
 const MODES = {
   floppy: {
-    label: "Floppy Head", emoji: "🐤", color: "#47c4ff", duration: 9999, // ends on crash, not a clock
-    desc: "Move your head up and down — the bird follows your head's Y position directly. No gravity, no flapping. Dodge the gaps.",
+    label: "Floppy Head", emoji: "🐤", color: DS.signal, duration: 9999,
+    desc: "Move your head up and down — the bird follows your head's Y position directly.",
   },
   dontlaugh: {
-    label: "Don't Laugh", emoji: "😐", color: "#00f5a0", duration: 20,
+    label: "Don't Laugh", emoji: "😐", color: DS.ice, duration: 20,
     desc: "Keep a straight face. Smile = you lose the round.",
     prompts: [
       "Imagine your grandma doing the floss dance",
@@ -85,7 +93,7 @@ const MODES = {
     ],
   },
   vibecheck: {
-    label: "Vibe Check", emoji: "🎭", color: "#ff4d6d", duration: 15,
+    label: "Vibe Check", emoji: "🎭", color: DS.live, duration: 15,
     desc: "Act out the vibe. Crowd votes who nailed it.",
     prompts: [
       "You just won the lottery but you're trying to act normal",
@@ -96,7 +104,7 @@ const MODES = {
     ],
   },
   mirrorme: {
-    label: "Mirror Me", emoji: "🪞", color: "#00d4ff", duration: 10,
+    label: "Mirror Me", emoji: "🪞", color: DS.signal, duration: 10,
     desc: "Copy the pose exactly. AI scores your accuracy.",
     poses: [
       "Raise both eyebrows as high as humanly possible",
@@ -107,7 +115,7 @@ const MODES = {
     ],
   },
   hottake: {
-    label: "Hot Take", emoji: "🌶️", color: "#ffd60a", duration: 15,
+    label: "Hot Take", emoji: "🌶️", color: DS.gold, duration: 15,
     desc: "React to the take in 5 seconds. Crowd picks best reaction.",
     prompts: [
       "Pineapple on pizza is actually really good",
@@ -199,32 +207,32 @@ function getRank(pts) {
 }
 
 function rankColor(pts) {
-  if (pts >= 5000) return "#00d4ff";
-  if (pts >= 1000) return "#a064ff";
-  if (pts >= 500)  return "#ffd60a";
-  if (pts >= 100)  return "#c0c0c0";
-  return "#cd7f32";
+  if (pts >= 5000) return DS.signal;
+  if (pts >= 1000) return "#c084fc";
+  if (pts >= 500)  return DS.gold;
+  if (pts >= 100)  return "#94a3b8";
+  return "#b87333";
 }
 
 /* ─────────────────────────────────────────────
    CSS
 ───────────────────────────────────────────── */
 const CSS = `
-@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Syne:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
 *{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'Inter',sans-serif;background:var(--sp-void);color:var(--sp-plat);}
 ::-webkit-scrollbar{width:4px}
-::-webkit-scrollbar-thumb{background:rgba(255,255,255,.08);border-radius:2px}
-@keyframes fadeUp   {from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
+::-webkit-scrollbar-thumb{background:var(--sp-rim);border-radius:4px}
+@keyframes fadeUp   {from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
 @keyframes fadeIn   {from{opacity:0}to{opacity:1}}
-@keyframes pulse    {0%,100%{opacity:1}50%{opacity:.35}}
-@keyframes glowP    {0%,100%{box-shadow:0 0 20px #00f5a044}50%{box-shadow:0 0 50px #00f5a099}}
+@keyframes pulse    {0%,100%{opacity:1}50%{opacity:.3}}
 @keyframes spinRing {to{transform:rotate(360deg)}}
-@keyframes floatUp  {0%{opacity:1;transform:translateY(0)}100%{opacity:0;transform:translateY(-80px)}}
-@keyframes timerTick{0%{transform:scale(1.15)}100%{transform:scale(1)}}
-@keyframes slideIn  {from{opacity:0;transform:translateX(-10px)}to{opacity:1;transform:translateX(0)}}
-@keyframes winPop   {0%{transform:scale(0.5);opacity:0}60%{transform:scale(1.1)}100%{transform:scale(1);opacity:1}}
-@keyframes smileWarn{0%,100%{opacity:1}50%{opacity:0.15}}
+@keyframes floatUp  {0%{opacity:1;transform:translateY(0)}100%{opacity:0;transform:translateY(-60px)}}
+@keyframes timerTick{0%{transform:scale(1.1)}100%{transform:scale(1)}}
 @keyframes voteGrow {from{width:0}to{width:var(--w)}}
+@keyframes sp-live  {0%,100%{opacity:1}50%{opacity:0.2}}
+@keyframes winPop   {0%{transform:scale(0.6);opacity:0}70%{transform:scale(1.05)}100%{transform:scale(1);opacity:1}}
+@keyframes smileWarn{0%,100%{opacity:1}50%{opacity:0.15}}
 `;
 
 /* ─────────────────────────────────────────────
@@ -236,8 +244,8 @@ function RoundDots({ total, scores }) {
     <div style={{ display: "flex", gap: 7, alignItems: "center" }}>
       {Array.from({ length: total }).map((_, i) => {
         const s = scores[i];
-        const col = s === "win" ? "#00f5a0" : s === "loss" ? "#ff4d6d" : "rgba(255,255,255,0.1)";
-        return <div key={i} style={{ width: 9, height: 9, borderRadius: "50%", background: col, boxShadow: s ? `0 0 7px ${col}` : "none", transition: "all 0.3s" }} />;
+        const col = s === "win" ? DS.ice : s === "loss" ? DS.live : "rgba(255,255,255,0.1)";
+        return <div key={i} style={{ width: 9, height: 9, borderRadius: "50%", background: col, transition: "background 0.3s" }} />;
       })}
     </div>
   );
@@ -249,9 +257,9 @@ function TimerRing({ seconds, total, color }) {
   return (
     <div style={{ position: "relative", width: 70, height: 70, flexShrink: 0 }}>
       <svg width="70" height="70" style={{ transform: "rotate(-90deg)" }}>
-        <circle cx="35" cy="35" r={r} fill="none" stroke="rgba(255,255,255,0.07)" strokeWidth="3" />
+        <circle cx="35" cy="35" r={r} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="3" />
         <circle cx="35" cy="35" r={r} fill="none"
-          stroke={danger ? "#ff4d6d" : color} strokeWidth="3"
+          stroke={danger ? DS.live : color} strokeWidth="3"
           strokeDasharray={circ}
           strokeDashoffset={circ - circ * (seconds / total)}
           strokeLinecap="round"
@@ -260,9 +268,9 @@ function TimerRing({ seconds, total, color }) {
       </svg>
       <div style={{
         position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
-        fontFamily: "'Bebas Neue',sans-serif", fontSize: 22,
-        color: danger ? "#ff4d6d" : "#f0eeea",
-        textShadow: danger ? "0 0 10px rgba(255,77,109,0.7)" : "none",
+        fontFamily: "'Space Grotesk', sans-serif", fontWeight: 800, fontSize: 22,
+        color: danger ? DS.live : DS.plat,
+        textShadow: danger ? `0 0 14px ${DS.live}90` : "none",
         animation: danger ? "timerTick 1s infinite" : "none",
       }}>{seconds}</div>
     </div>
@@ -272,15 +280,14 @@ function TimerRing({ seconds, total, color }) {
 function VoteBar({ label, pct, color, isMe }) {
   return (
     <div style={{ marginBottom: 10 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 5, color: isMe ? color : "#555" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 5, color: isMe ? color : DS.ash }}>
         <span>{label}</span>
         <span style={{ fontFamily: "'JetBrains Mono',monospace" }}>{Math.round(pct)}%</span>
       </div>
-      <div style={{ background: "rgba(255,255,255,0.06)", borderRadius: 4, height: 8, overflow: "hidden" }}>
+      <div style={{ background: "rgba(255,255,255,0.05)", borderRadius: 6, height: 8, overflow: "hidden" }}>
         <div style={{
-          height: "100%", borderRadius: 4, width: `${pct}%`,
-          background: `linear-gradient(90deg,${color},${color}88)`,
-          boxShadow: isMe ? `0 0 10px ${color}55` : "none",
+          height: "100%", borderRadius: 6, width: `${pct}%`,
+          background: color,
           "--w": `${pct}%`, animation: "voteGrow 1.2s cubic-bezier(0.34,1.56,0.64,1) both",
         }} />
       </div>
@@ -859,8 +866,8 @@ export default function GameScreen({
       }
 
       const smiling = ft.mar > SMILE_MAR_THRESHOLD || ft.cheekRaise > 0.72;
-      const dotColor = smiling ? "#ff4d6d" : "#00f5a0";
-      const glowCol  = smiling ? "#ff4d6d" : "#00f5a0";
+      const dotColor = smiling ? "#ff2442" : "#06d6a0";
+      const glowCol  = smiling ? "#ff2442" : "#06d6a0";
 
       // Draw key facial landmarks — lips, eyes, nose outline
       // We only draw ~30 key points to keep it fast and readable
@@ -902,9 +909,9 @@ export default function GameScreen({
           if (idx === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
         });
         ctx.closePath();
-        ctx.strokeStyle = "#ff4d6d";
+        ctx.strokeStyle = "#ff2442";
         ctx.lineWidth = 2;
-        ctx.shadowColor = "#ff4d6d";
+        ctx.shadowColor = "#ff2442";
         ctx.shadowBlur = 12;
         ctx.stroke();
         ctx.shadowBlur = 0;
@@ -1053,7 +1060,7 @@ export default function GameScreen({
      RENDER
   ───────────────────────────────────────────── */
   return (
-    <div style={{ minHeight:"100vh", background:BG, backgroundAttachment:"fixed", color:"#f0eeea", fontFamily:"'Syne',sans-serif", display:"flex", flexDirection:"column" }}>
+    <div style={{ minHeight:"100vh", background:DS.void, backgroundAttachment:"fixed", color:"#eeeeff", fontFamily:"'Inter',sans-serif", display:"flex", flexDirection:"column" }}>
       <style>{CSS}</style>
 
       {/* hidden video for face detection processing */}
@@ -1062,14 +1069,14 @@ export default function GameScreen({
       {/* ══════ NAV ══════ */}
       <nav style={{ flexShrink:0, display:"flex", alignItems:"center", justifyContent:"space-between", height:58, padding:"0 clamp(12px,4vw,36px)", background:"rgba(14,14,15,0.92)", backdropFilter:"blur(24px)", borderBottom:"1px solid rgba(255,255,255,0.06)", zIndex:100 }}>
         <div style={{ display:"flex", alignItems:"center", gap:9 }}>
-          <div style={{ width:26, height:26, borderRadius:7, background:"linear-gradient(135deg,#00f5a0,#00d4ff)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, animation:"glowP 3s infinite" }}>▶</div>
-          <span style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:20, letterSpacing:3, background:"linear-gradient(90deg,#00f5a0,#00d4ff)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent" }}>StrangerPlay</span>
-          <span style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:"#333", marginLeft:6 }}>// {mode.label}</span>
+          <div style={{ width:26, height:26, borderRadius:12, background:"var(--sp-signal)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:12 }}>▶</div>
+          <span style={{ fontFamily:"'Space Grotesk',sans-serif",fontWeight:800, fontSize:20, letterSpacing:3, background:DS.signal, color:DS.plat }}>StrangerPlay</span>
+          <span style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:"#6b6b9a", marginLeft:6 }}>// {mode.label}</span>
         </div>
         <div style={{ display:"flex", alignItems:"center", gap:10 }}>
           <RoundDots total={TOTAL_ROUNDS} scores={myRoundScores} />
-          <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#ffd60a", background:"rgba(255,214,10,0.07)", border:"1px solid rgba(255,214,10,0.14)", borderRadius:20, padding:"3px 12px" }}>{myPoints} pts</div>
-          {onBack && <button onClick={()=>{ cleanup(); onBack(); }} style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:8, padding:"6px 16px", color:"#555", fontSize:13, cursor:"pointer" }}>← back</button>}
+          <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#ffbe0b", background:"rgba(255,214,10,0.07)", border:"1px solid rgba(255,214,10,0.14)", borderRadius:20, padding:"3px 12px" }}>{myPoints} pts</div>
+          {onBack && <button onClick={()=>{ cleanup(); onBack(); }} style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:12, padding:"6px 16px", color:"#6b6b9a", fontSize:13, cursor:"pointer" }}>← back</button>}
         </div>
       </nav>
 
@@ -1085,22 +1092,22 @@ export default function GameScreen({
               <div style={{ display:"flex", alignItems:"center", gap:8 }}>
                 <div style={{ width:32, height:32, borderRadius:"50%", background:"rgba(0,245,160,0.1)", border:"2px solid rgba(0,245,160,0.25)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:16 }}>⭐</div>
                 <div>
-                  <div style={{ fontSize:12, fontWeight:600, color:"#00f5a0" }}>raj_np 🇳🇵</div>
-                  <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:22, lineHeight:1, color:"#00f5a0" }}>{myScore}</div>
+                  <div style={{ fontSize:12, fontWeight:600, color:"#06d6a0" }}>raj_np 🇳🇵</div>
+                  <div style={{ fontFamily:"'Space Grotesk',sans-serif",fontWeight:800, fontSize:22, lineHeight:1, color:"#06d6a0" }}>{myScore}</div>
                 </div>
               </div>
               <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:4 }}>
                 {phase==="playing" && !voting
                   ? <TimerRing seconds={timer} total={mode.duration} color={mode.color} />
-                  : <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color: voting?mode.color:"#444", letterSpacing:2, animation: voting?"pulse 1s infinite":"none" }}>
+                  : <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color: voting?mode.color:"#6b6b9a", letterSpacing:2, animation: voting?"pulse 1s infinite":"none" }}>
                       {voting ? "VOTING..." : `Round ${round}/${TOTAL_ROUNDS}`}
                     </div>
                 }
               </div>
               <div style={{ display:"flex", alignItems:"center", gap:8, justifyContent:"flex-end" }}>
                 <div style={{ textAlign:"right" }}>
-                  <div style={{ fontSize:12, fontWeight:600, color:"#ff4d6d" }}>{opponent.name} {opponent.flag}</div>
-                  <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:22, lineHeight:1, color:"#ff4d6d" }}>{oppScore}</div>
+                  <div style={{ fontSize:12, fontWeight:600, color:"#ff2442" }}>{opponent.name} {opponent.flag}</div>
+                  <div style={{ fontFamily:"'Space Grotesk',sans-serif",fontWeight:800, fontSize:22, lineHeight:1, color:"#ff2442" }}>{oppScore}</div>
                 </div>
                 <div style={{ width:32, height:32, borderRadius:"50%", background:"rgba(255,77,109,0.1)", border:"2px solid rgba(255,77,109,0.25)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:16 }}>{opponent.avatar}</div>
               </div>
@@ -1145,13 +1152,13 @@ export default function GameScreen({
                 {!remoteConnected && !remoteLeft && (
                   <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:6, background:"rgba(8,8,9,0.9)" }}>
                     <div style={{ width:18, height:18, borderRadius:"50%", border:"2px solid transparent", borderTopColor:mode.color, animation:"spinRing 0.9s linear infinite" }} />
-                    <div style={{ fontSize:9, color:"#555", fontFamily:"'JetBrains Mono',monospace", textAlign:"center" }}>connecting...</div>
+                    <div style={{ fontSize:9, color:"#6b6b9a", fontFamily:"'JetBrains Mono',monospace", textAlign:"center" }}>connecting...</div>
                   </div>
                 )}
                 {remoteLeft && (
                   <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:4, background:"rgba(8,8,9,0.95)" }}>
                     <div style={{ fontSize:16 }}>👋</div>
-                    <div style={{ fontSize:8, color:"#ff4d6d", fontFamily:"'JetBrains Mono',monospace", textAlign:"center", padding:"0 4px" }}>left the call</div>
+                    <div style={{ fontSize:8, color:"#ff2442", fontFamily:"'JetBrains Mono',monospace", textAlign:"center", padding:"0 4px" }}>left the call</div>
                   </div>
                 )}
                 {/* opponent label */}
@@ -1165,8 +1172,8 @@ export default function GameScreen({
             {remoteLeft && (
               <div style={{ position:"absolute", inset:0, zIndex:9, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:16, background:"rgba(8,8,9,0.92)", animation:"fadeIn 0.3s both" }}>
                 <div style={{ fontSize:40 }}>👋</div>
-                <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:24, letterSpacing:2, color:"#ff4d6d" }}>STRANGER LEFT</div>
-                <button onClick={() => { cleanup(); onBack && onBack(); }} style={{ background:`linear-gradient(135deg,${mode.color},#00d4ff)`, color:"#0a0a0a", border:"none", borderRadius:10, padding:"11px 28px", fontFamily:"'Bebas Neue',sans-serif", fontSize:15, letterSpacing:2, cursor:"pointer" }}>
+                <div style={{ fontFamily:"'Space Grotesk',sans-serif",fontWeight:800, fontSize:24, letterSpacing:2, color:"#ff2442" }}>STRANGER LEFT</div>
+                <button onClick={() => { cleanup(); onBack && onBack(); }} style={{ background:DS.signal, color:"#fff", border:"none", borderRadius:10, padding:"11px 28px", fontFamily:"'Space Grotesk',sans-serif",fontWeight:800, fontSize:15, letterSpacing:2, cursor:"pointer" }}>
                   FIND ANOTHER
                 </button>
               </div>
@@ -1174,15 +1181,15 @@ export default function GameScreen({
 
             {/* smile border flash */}
             {smileDetected && (
-              <div style={{ position:"absolute", inset:0, borderRadius:16, border:"3px solid #ff4d6d", boxShadow:"inset 0 0 40px rgba(255,77,109,0.3)", animation:"smileWarn 0.3s infinite", pointerEvents:"none", zIndex:5 }} />
+              <div style={{ position:"absolute", inset:0, borderRadius:16, border:"3px solid #ff2442", boxShadow:"inset 0 0 40px rgba(255,77,109,0.3)", animation:"smileWarn 0.3s infinite", pointerEvents:"none", zIndex:5 }} />
             )}
 
             {/* ── LOADING ── */}
             {phase==="loading" && (
               <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:16, background:"rgba(8,8,9,0.96)", zIndex:10 }}>
-                <div style={{ width:50, height:50, borderRadius:"50%", border:"2px solid transparent", borderTopColor:"#00f5a0", borderRightColor:"#00d4ff", animation:"spinRing 1s linear infinite" }} />
-                <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:20, letterSpacing:3, color:"#00f5a0" }}>SETTING UP</div>
-                <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#444", textAlign:"center", maxWidth:240 }}>{loadStatus}</div>
+                <div style={{ width:50, height:50, borderRadius:"50%", border:"2px solid transparent", borderTopColor:DS.signal, borderRightColor:DS.signal, animation:"spinRing 1s linear infinite" }} />
+                <div style={{ fontFamily:"'Space Grotesk',sans-serif",fontWeight:800, fontSize:20, letterSpacing:3, color:"#06d6a0" }}>SETTING UP</div>
+                <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#6b6b9a", textAlign:"center", maxWidth:240 }}>{loadStatus}</div>
               </div>
             )}
 
@@ -1196,7 +1203,7 @@ export default function GameScreen({
                 <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:"#666", letterSpacing:3, textTransform:"uppercase" }}>
                   // say hi, then pick something
                 </div>
-                <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"clamp(22px,5vw,32px)", color:"#fff", textAlign:"center" }}>
+                <div style={{ fontFamily:"'Space Grotesk',sans-serif",fontWeight:800, fontSize:"clamp(22px,5vw,32px)", color:"#fff", textAlign:"center" }}>
                   Choose a game together
                 </div>
 
@@ -1206,8 +1213,8 @@ export default function GameScreen({
                       Your stranger wants to play <b style={{ color: MODES[proposedGame]?.color }}>{MODES[proposedGame]?.label}</b>
                     </div>
                     <div style={{ display:"flex", gap:10 }}>
-                      <button onClick={() => acceptGame(proposedGame)} style={{ padding:"10px 22px", borderRadius:8, border:"none", background:"#00f5a0", color:"#080809", fontWeight:700, cursor:"pointer" }}>Accept</button>
-                      <button onClick={() => setProposedGame(null)} style={{ padding:"10px 22px", borderRadius:8, border:"1px solid #333", background:"transparent", color:"#999", cursor:"pointer" }}>Not now</button>
+                      <button onClick={() => acceptGame(proposedGame)} style={{ padding:"10px 22px", borderRadius:12, border:"none", background:"#06d6a0", color:"#080809", fontWeight:700, cursor:"pointer" }}>Accept</button>
+                      <button onClick={() => setProposedGame(null)} style={{ padding:"10px 22px", borderRadius:12, border:"1px solid #333", background:"transparent", color:"#999", cursor:"pointer" }}>Not now</button>
                     </div>
                   </div>
                 ) : (
@@ -1230,9 +1237,9 @@ export default function GameScreen({
             {phase==="intro" && (
               <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:14, background:"rgba(8,8,9,0.78)", zIndex:10, animation:"fadeIn 0.3s both" }}>
                 <div style={{ fontSize:52 }}>{mode.emoji}</div>
-                <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"clamp(28px,6vw,48px)", letterSpacing:3, color:mode.color, textShadow:`0 0 30px ${mode.color}` }}>{mode.label.toUpperCase()}</div>
-                <div style={{ fontSize:13, color:"#555", textAlign:"center", maxWidth:260, lineHeight:1.6 }}>{mode.desc}</div>
-                <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#333", letterSpacing:2, animation:"pulse 1.5s infinite" }}>starting round 1...</div>
+                <div style={{ fontFamily:"'Space Grotesk',sans-serif",fontWeight:800, fontSize:"clamp(28px,6vw,48px)", letterSpacing:3, color:mode.color, textShadow:`0 0 30px ${mode.color}` }}>{mode.label.toUpperCase()}</div>
+                <div style={{ fontSize:13, color:"#6b6b9a", textAlign:"center", maxWidth:260, lineHeight:1.6 }}>{mode.desc}</div>
+                <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#6b6b9a", letterSpacing:2, animation:"pulse 1.5s infinite" }}>starting round 1...</div>
               </div>
             )}
 
@@ -1242,7 +1249,7 @@ export default function GameScreen({
 
                 {/* You smiled warning */}
                 {gameMode==="dontlaugh" && smileDetected && (
-                  <div style={{ position:"absolute", top:"42%", left:"50%", transform:"translate(-50%,-50%)", fontFamily:"'Bebas Neue',sans-serif", fontSize:"clamp(36px,8vw,56px)", color:"#ff4d6d", textShadow:"0 0 30px rgba(255,77,109,0.9)", animation:"smileWarn 0.3s infinite", whiteSpace:"nowrap", zIndex:8 }}>
+                  <div style={{ position:"absolute", top:"42%", left:"50%", transform:"translate(-50%,-50%)", fontFamily:"'Space Grotesk',sans-serif",fontWeight:800, fontSize:"clamp(36px,8vw,56px)", color:"#ff2442", textShadow:"0 0 30px rgba(255,77,109,0.9)", animation:"smileWarn 0.3s infinite", whiteSpace:"nowrap", zIndex:8 }}>
                     YOU SMILED! 😂
                   </div>
                 )}
@@ -1253,7 +1260,7 @@ export default function GameScreen({
                     <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:mode.color, letterSpacing:2, marginBottom:5 }}>
                       {gameMode==="dontlaugh"?"IMAGINE THIS:":gameMode==="hottake"?"HOT TAKE:":"YOUR VIBE:"}
                     </div>
-                    <div style={{ fontSize:"clamp(13px,2vw,16px)", fontWeight:600, color:"#f0eeea", lineHeight:1.4 }}>{currentPrompt}</div>
+                    <div style={{ fontSize:"clamp(13px,2vw,16px)", fontWeight:600, color:"#eeeeff", lineHeight:1.4 }}>{currentPrompt}</div>
                   </div>
                 )}
 
@@ -1263,21 +1270,21 @@ export default function GameScreen({
                     <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:mode.color, letterSpacing:2, marginBottom:5 }}>
                       {mirrorPhase==="pose"?"MAKE THIS FACE:":"NOW COPY IT EXACTLY:"}
                     </div>
-                    <div style={{ fontSize:14, fontWeight:600, color:"#f0eeea", lineHeight:1.4, marginBottom:mirrorPhase==="pose"?10:0 }}>{currentPrompt}</div>
+                    <div style={{ fontSize:14, fontWeight:600, color:"#eeeeff", lineHeight:1.4, marginBottom:mirrorPhase==="pose"?10:0 }}>{currentPrompt}</div>
                     {mirrorPhase==="pose" && (
-                      <button onClick={captureMyPose} style={{ background:`linear-gradient(135deg,${mode.color},#00d4ff)`, color:"#0a0a0a", border:"none", borderRadius:8, padding:"8px 20px", fontFamily:"'Bebas Neue',sans-serif", fontSize:16, letterSpacing:2, cursor:"pointer" }}>
+                      <button onClick={captureMyPose} style={{ background:DS.signal, color:"#fff", border:"none", borderRadius:12, padding:"8px 20px", fontFamily:"'Space Grotesk',sans-serif",fontWeight:800, fontSize:16, letterSpacing:2, cursor:"pointer" }}>
                         CAPTURE POSE
                       </button>
                     )}
                     {myMirrorScore!==null && (
-                      <div style={{ marginTop:6, fontFamily:"'Bebas Neue',sans-serif", fontSize:22, color:mode.color }}>Accuracy: {myMirrorScore}/100</div>
+                      <div style={{ marginTop:6, fontFamily:"'Space Grotesk',sans-serif",fontWeight:800, fontSize:22, color:mode.color }}>Accuracy: {myMirrorScore}/100</div>
                     )}
                   </div>
                 )}
 
                 {/* vote trigger */}
                 {(gameMode==="vibecheck"||gameMode==="hottake") && !voting && timer<=mode.duration-5 && (
-                  <button onClick={triggerVote} style={{ background:`linear-gradient(135deg,${mode.color},#a064ff)`, color:"#0a0a0a", border:"none", borderRadius:10, padding:"11px 0", fontFamily:"'Bebas Neue',sans-serif", fontSize:18, letterSpacing:2, cursor:"pointer" }}>
+                  <button onClick={triggerVote} style={{ background:DS.signal, color:"#fff", border:"none", borderRadius:10, padding:"11px 0", fontFamily:"'Space Grotesk',sans-serif",fontWeight:800, fontSize:18, letterSpacing:2, cursor:"pointer" }}>
                     START CROWD VOTE
                   </button>
                 )}
@@ -1285,9 +1292,9 @@ export default function GameScreen({
                 {/* vote bars */}
                 {voting && (
                   <div style={{ background:"rgba(0,0,0,0.8)", backdropFilter:"blur(14px)", borderRadius:12, padding:14, border:`1px solid ${mode.color}33` }}>
-                    <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:"#444", letterSpacing:2, marginBottom:10 }}>CROWD VOTE</div>
-                    <VoteBar label="you 🇳🇵"    pct={myVotePct}  color="#00f5a0" isMe />
-                    <VoteBar label={`${opponent.name} ${opponent.flag}`} pct={oppVotePct} color="#ff4d6d" />
+                    <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:"#6b6b9a", letterSpacing:2, marginBottom:10 }}>CROWD VOTE</div>
+                    <VoteBar label="you 🇳🇵"    pct={myVotePct}  color="#06d6a0" isMe />
+                    <VoteBar label={`${opponent.name} ${opponent.flag}`} pct={oppVotePct} color="#ff2442" />
                   </div>
                 )}
               </div>
@@ -1296,10 +1303,10 @@ export default function GameScreen({
             {/* ── ROUND RESULT ── */}
             {phase==="roundResult" && (
               <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:12, background:"rgba(8,8,9,0.88)", zIndex:10, animation:"fadeIn 0.3s both" }}>
-                <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"clamp(48px,10vw,80px)", letterSpacing:4, lineHeight:1, color:roundResult==="win"?"#00f5a0":"#ff4d6d", textShadow:`0 0 40px ${roundResult==="win"?"rgba(0,245,160,0.7)":"rgba(255,77,109,0.7)"}`, animation:"winPop 0.5s both" }}>
+                <div style={{ fontFamily:"'Space Grotesk',sans-serif",fontWeight:800, fontSize:"clamp(48px,10vw,80px)", letterSpacing:4, lineHeight:1, color:roundResult==="win"?"var(--sp-ice)":"var(--sp-live)", animation:"winPop 0.4s both" }}>
                   {roundResult==="win"?"YOU WIN!":"YOU LOSE"}
                 </div>
-                <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:12, color:"#444" }}>
+                <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:12, color:"#6b6b9a" }}>
                   {round < TOTAL_ROUNDS ? `round ${round+1} starting...` : "wrapping up..."}
                 </div>
               </div>
@@ -1316,24 +1323,24 @@ export default function GameScreen({
               <span style={{ fontSize:24 }}>{mode.emoji}</span>
               <div>
                 <div style={{ fontSize:13, fontWeight:600, color:mode.color }}>{mode.label}</div>
-                <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:"#444" }}>round {round}/{TOTAL_ROUNDS}</div>
+                <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:"#6b6b9a" }}>round {round}/{TOTAL_ROUNDS}</div>
               </div>
             </div>
             <div style={{ fontSize:12, color:"#3a3a3f", lineHeight:1.5, marginBottom:10 }}>{mode.desc}</div>
-            <div style={{ padding:"8px 12px", background:"rgba(255,214,10,0.07)", border:"1px solid rgba(255,214,10,0.14)", borderRadius:10, fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#ffd60a" }}>
+            <div style={{ padding:"8px 12px", background:"rgba(255,214,10,0.07)", border:"1px solid rgba(255,214,10,0.14)", borderRadius:10, fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#ffbe0b" }}>
               🏆 {entryFee*2} pts pot
             </div>
           </div>
 
           {/* round tracker */}
           <div style={{ background:"rgba(255,255,255,0.025)", border:"1px solid rgba(255,255,255,0.06)", borderRadius:14, padding:14 }}>
-            <div style={{ fontSize:10, color:"#444", letterSpacing:3, textTransform:"uppercase", marginBottom:12 }}>rounds</div>
+            <div style={{ fontSize:10, color:"#6b6b9a", letterSpacing:3, textTransform:"uppercase", marginBottom:12 }}>rounds</div>
             {Array.from({length:TOTAL_ROUNDS}).map((_,i)=>{
               const s = myRoundScores[i];
               const active = i+1===round && phase==="playing";
               return (
                 <div key={i} style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
-                  <div style={{ width:6, height:6, borderRadius:"50%", background:s==="win"?"#00f5a0":s==="loss"?"#ff4d6d":active?"rgba(255,255,255,0.3)":"rgba(255,255,255,0.08)", boxShadow:s?`0 0 6px ${s==="win"?"#00f5a0":"#ff4d6d"}`:active?"0 0 6px rgba(255,255,255,0.3)":"none", transition:"all 0.3s" }} />
+                  <div style={{ width:6, height:6, borderRadius:"50%", background:s==="win"?"var(--sp-ice)":s==="loss"?"var(--sp-live)":active?"var(--sp-rimhov)":"var(--sp-rim)", transition:"background 0.3s" }} />
                   <div style={{ fontSize:12, color:s?"#d0cec8":active?"#888":"#333" }}>
                     Round {i+1} {s?(s==="win"?"· won":"· lost"):active?"· now playing":"· upcoming"}
                   </div>
@@ -1344,7 +1351,7 @@ export default function GameScreen({
 
           {/* opponent */}
           <div style={{ background:"rgba(255,255,255,0.025)", border:"1px solid rgba(255,255,255,0.06)", borderRadius:14, padding:14 }}>
-            <div style={{ fontSize:10, color:"#444", letterSpacing:3, textTransform:"uppercase", marginBottom:10 }}>opponent</div>
+            <div style={{ fontSize:10, color:"#6b6b9a", letterSpacing:3, textTransform:"uppercase", marginBottom:10 }}>opponent</div>
             <div style={{ display:"flex", alignItems:"center", gap:10 }}>
               <div style={{ width:36, height:36, borderRadius:"50%", background:"rgba(255,77,109,0.1)", border:"1px solid rgba(255,77,109,0.25)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:18 }}>{opponent.avatar}</div>
               <div>
@@ -1370,26 +1377,26 @@ export default function GameScreen({
       {/* ══════ MATCH RESULT FULLSCREEN ══════ */}
       {phase==="matchResult" && (
         <div style={{ position:"fixed", inset:0, background:"rgba(8,8,9,0.96)", backdropFilter:"blur(20px)", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:20, zIndex:500, animation:"fadeIn 0.4s both" }}>
-          <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"clamp(56px,12vw,96px)", letterSpacing:4, lineHeight:1, color:matchWon?"#00f5a0":"#ff4d6d", textShadow:`0 0 60px ${matchWon?"rgba(0,245,160,0.7)":"rgba(255,77,109,0.7)"}`, animation:"winPop 0.6s both" }}>
+          <div style={{ fontFamily:"'Space Grotesk',sans-serif",fontWeight:800, fontSize:"clamp(56px,12vw,96px)", letterSpacing:4, lineHeight:1, color:matchWon?"var(--sp-ice)":"var(--sp-live)", animation:"winPop 0.5s both" }}>
             {matchWon?"YOU WIN 🎉":"YOU LOSE 💀"}
           </div>
 
           <div style={{ display:"flex", gap:12, flexWrap:"wrap", justifyContent:"center" }}>
-            {[["rounds won",myScore,"#00f5a0"],["rounds lost",oppScore,"#ff4d6d"],["pts pot",entryFee*2,"#ffd60a"]].map(([l,v,c])=>(
+            {[["rounds won",myScore,"#06d6a0"],["rounds lost",oppScore,"#ff2442"],["pts pot",entryFee*2,"#ffbe0b"]].map(([l,v,c])=>(
               <div key={l} style={{ textAlign:"center", background:"rgba(255,255,255,0.025)", border:"1px solid rgba(255,255,255,0.06)", borderRadius:14, padding:"14px 20px" }}>
-                <div style={{ fontSize:10, color:"#444", letterSpacing:2, textTransform:"uppercase", marginBottom:4 }}>{l}</div>
-                <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:44, color:c, lineHeight:1 }}>{v}</div>
+                <div style={{ fontSize:10, color:"#6b6b9a", letterSpacing:2, textTransform:"uppercase", marginBottom:4 }}>{l}</div>
+                <div style={{ fontFamily:"'Space Grotesk',sans-serif",fontWeight:800, fontSize:44, color:c, lineHeight:1 }}>{v}</div>
               </div>
             ))}
           </div>
 
-          <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:14, color:matchWon?"#ffd60a":"#ff4d6d", background:matchWon?"rgba(255,214,10,0.08)":"rgba(255,77,109,0.08)", border:`1px solid ${matchWon?"rgba(255,214,10,0.2)":"rgba(255,77,109,0.2)"}`, borderRadius:12, padding:"11px 28px" }}>
+          <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:14, color:matchWon?"#ffbe0b":"#ff2442", background:matchWon?"rgba(255,214,10,0.08)":"rgba(255,77,109,0.08)", border:`1px solid ${matchWon?"rgba(255,214,10,0.2)":"rgba(255,77,109,0.2)"}`, borderRadius:12, padding:"11px 28px" }}>
             {matchWon ? `+${entryFee} pts earned` : `-${entryFee} pts lost`}
           </div>
 
           <div style={{ display:"flex", gap:12, flexWrap:"wrap", justifyContent:"center" }}>
-            <button onClick={playAgain} style={{ background:"linear-gradient(135deg,#00f5a0,#00d4ff)", color:"#0a0a0a", border:"none", borderRadius:12, padding:"13px 32px", fontFamily:"'Bebas Neue',sans-serif", fontSize:20, letterSpacing:2, cursor:"pointer", boxShadow:"0 0 30px rgba(0,245,160,0.35)" }}>PLAY AGAIN</button>
-            {onBack && <button onClick={()=>{ cleanup(); onBack(); }} style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:12, padding:"13px 24px", color:"#555", fontSize:14, cursor:"pointer" }}>Exit</button>}
+            <button onClick={playAgain} style={{ background:"var(--sp-signal)", color:"#fff", border:"none", borderRadius:12, padding:"13px 32px", fontFamily:"'Space Grotesk',sans-serif",fontWeight:700, fontSize:18, letterSpacing:0.5, cursor:"pointer" }}>PLAY AGAIN</button>
+            {onBack && <button onClick={()=>{ cleanup(); onBack(); }} style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:12, padding:"13px 24px", color:"#6b6b9a", fontSize:14, cursor:"pointer" }}>Exit</button>}
           </div>
         </div>
       )}

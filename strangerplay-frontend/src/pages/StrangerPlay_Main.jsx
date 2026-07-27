@@ -7,253 +7,225 @@ import Rewards from "./Rewards";
 import Settings from "./Settings";
 import GameScreen from "./GameScreen";
 
-/* ═══════════════════════════════════════════════════════════════
-   DESIGN SYSTEM — StrangerPlay v2
-   
-   Identity: "broadcast booth meets fight arena"
-   Not a social app. Not a dating app. A live competitive stage.
-   
-   Palette:
-     Void        #080809  — page background
-     Surface     #0f1012  — card background
-     Rim         #1a1c1f  — borders
-     Soft rim    #252830  — hover/active
-     Platinum    #e8e6e0  — primary text
-     Ash         #4a4d56  — muted text
-     Ghost       #2a2d33  — disabled
-     
-     Signal      #e8ff47  — primary accent (electric lime — NOT green)
-     Live        #ff3d57  — live/danger
-     Ice         #47c4ff  — secondary accent
-     Gold        #ffb319  — points/rank
-     
-   Type:
-     Display: Fraunces italic 600 — editorial serif, ink-stamp brutalist accents
-     Body: Inter 400/500 — clean, readable
-     Mono: JetBrains Mono — data, counters, tags
-     
-   Signature element:
-     The "SIGNAL BAR" — a 2px horizontal lime line that slides under 
-     active nav items and pulses on live content. Borrowed from broadcast
-     studio VU meters. No other underlines anywhere.
-     
-   Motion: 
-     Purposeful only. No constant floating orbs.
-     Entrance: 40px translate-up, 0.4s ease-out.
-     Hover: 120ms cubic-bezier(0.34,1.56,0.64,1) — slight springy.
-     Live pulse: opacity 1→0.3, 1.2s infinite — slow enough to read.
-════════════════════════════════════════════════════════════════ */
+/* ─────────────────────────────────────────────────────────────
+   DESIGN SYSTEM — StrangerPlay
+   Simple. One accent. Two surfaces. No gradients. No glow.
+   Dark and light mode via CSS variables on <html data-theme>.
+   ─────────────────────────────────────────────────────────────
+   HOW THEME WORKS:
+   - applyTheme("dark"|"light") sets document.documentElement.dataset.theme
+   - Every DS.xxx is a var(--sp-xxx) reference
+   - Browser resolves the variable — all components repaint for free
+   - Settings.jsx calls window.applyTheme() to toggle
+───────────────────────────────────────────────────────────── */
 
 const DS = {
-  void:    "#0d0b08",
-  surface: "#161310",
-  surface2:"#1d1812",
-  rim:     "#2b251d",
-  rimHov:  "#473b2a",
-  plat:    "#f4ede1",
-  ash:     "#8a7d68",
-  ghost:   "#352d22",
-  signal:  "#c97b3d",
-  live:    "#d6452f",
-  ice:     "#7a8f7c",
-  gold:    "#e0b454",
+  void:    "var(--sp-void)",
+  surface: "var(--sp-surface)",
+  surface2:"var(--sp-surface2)",
+  rim:     "var(--sp-rim)",
+  plat:    "var(--sp-plat)",
+  ash:     "var(--sp-ash)",
+  ghost:   "var(--sp-ghost)",
+  signal:  "var(--sp-signal)",
+  live:    "var(--sp-live)",
+  ice:     "var(--sp-ice)",
+  gold:    "var(--sp-gold)",
 };
 
-const GLOBAL_CSS = `
-  @import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,500;0,9..144,700;1,9..144,500&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+// Expose globally so Settings.jsx can call it without importing
+window.applyTheme = function(theme) {
+  document.documentElement.dataset.theme = theme;
+  localStorage.setItem("sp_theme", theme);
+};
 
+// Apply saved theme immediately on load (before first render)
+window.applyTheme(localStorage.getItem("sp_theme") || "dark");
+
+const GLOBAL_CSS = `
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  /* ── CSS VARIABLES ─────────────────────────────── */
+  :root, html[data-theme="dark"] {
+    --sp-void:    #18191a;
+    --sp-surface: #242526;
+    --sp-surface2:#3a3b3c;
+    --sp-rim:     #3e4042;
+    --sp-plat:    #e4e6eb;
+    --sp-ash:     #b0b3b8;
+    --sp-ghost:   #6a6b6c;
+    --sp-signal:  #2374e1;
+    --sp-live:    #f02849;
+    --sp-ice:     #45bd62;
+    --sp-gold:    #f7b928;
+  }
+  html[data-theme="light"] {
+    --sp-void:    #f0f2f5;
+    --sp-surface: #ffffff;
+    --sp-surface2:#f7f8fa;
+    --sp-rim:     #dadde1;
+    --sp-plat:    #050505;
+    --sp-ash:     #65676b;
+    --sp-ghost:   #bcc0c4;
+    --sp-signal:  #1877f2;
+    --sp-live:    #e41e3f;
+    --sp-ice:     #31a24c;
+    --sp-gold:    #e8a400;
+  }
+
+  /* ── RESET ───────────────────────────────────── */
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  html { font-size: 16px; scroll-behavior: smooth; }
+  html { font-size: 16px; }
   body {
-    background: ${DS.void};
-    color: ${DS.plat};
+    background: var(--sp-void);
+    color: var(--sp-plat);
     font-family: 'Inter', sans-serif;
-    min-height: 100vh;
+    min-height: 100dvh;
     overflow-x: hidden;
     -webkit-tap-highlight-color: transparent;
-    background-image:
-      radial-gradient(ellipse 900px 600px at 15% -10%, ${DS.signal}14, transparent 60%),
-      radial-gradient(ellipse 700px 500px at 100% 30%, ${DS.live}0d, transparent 55%);
+    transition: background 0.2s, color 0.2s;
   }
-  /* film grain — the thing that actually reads as "expensive", not a gradient */
-  body::after {
-    content: '';
-    position: fixed; inset: 0; z-index: 9999; pointer-events: none;
-    opacity: 0.05; mix-blend-mode: overlay;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='90' height='90'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-  }
-
-  /* ── ANIMATIONS ── */
-  @keyframes sp-up      { from{opacity:0;transform:translateY(28px) rotate(-0.4deg)} to{opacity:1;transform:translateY(0) rotate(0)} }
-  @keyframes sp-in      { from{opacity:0;transform:translateY(-8px)} to{opacity:1;transform:translateY(0)} }
-  @keyframes sp-live    { 0%,100%{opacity:1} 50%{opacity:0.25} }
-  @keyframes sp-spin    { to{transform:rotate(360deg)} }
-  @keyframes sp-scan    { 0%{transform:translateX(-100%) skewX(-8deg)} 100%{transform:translateX(100vw) skewX(-8deg)} }
-  @keyframes sp-signal  { 0%,100%{box-shadow:6px 6px 0 0 ${DS.signal}55} 50%{box-shadow:9px 9px 0 0 ${DS.signal}22} }
-  @keyframes sp-float   { 0%,100%{transform:translateY(0) rotate(-0.6deg)} 50%{transform:translateY(-10px) rotate(0.6deg)} }
-  @keyframes sp-ticker  { from{transform:translateX(100%)} to{transform:translateX(-100%)} }
-  @keyframes sp-stamp   { 0%{opacity:0;transform:scale(2.2) rotate(-14deg)} 60%{opacity:1} 100%{opacity:1;transform:scale(1) rotate(-6deg)} }
-
-  .sp-up { animation: sp-up 0.5s cubic-bezier(0.16,1,0.3,1) both; }
-
-  /* ── SCROLLBAR ── */
-  ::-webkit-scrollbar       { width: 3px; }
+  ::-webkit-scrollbar       { width: 4px; }
   ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: ${DS.rim}; border-radius: 99px; }
+  ::-webkit-scrollbar-thumb { background: var(--sp-rim); border-radius: 4px; }
 
-  /* ── NAV MARK (replaces underline-bar with a brass tick + serif index) ── */
-  .sp-nav-item { position: relative; }
-  .sp-nav-item::before {
-    content: '◆';
-    position: absolute;
-    left: 50%; top: -13px;
-    transform: translateX(-50%) scale(0);
-    font-size: 7px; color: ${DS.signal};
-    transition: transform 0.25s cubic-bezier(0.34,1.56,0.64,1);
-  }
-  .sp-nav-item.active::before { transform: translateX(-50%) scale(1); }
+  /* ── ONLY TWO ANIMATIONS — live dot pulse + page enter ── */
+  @keyframes sp-live   { 0%,100%{opacity:1} 50%{opacity:0.25} }
+  @keyframes sp-enter  { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
+  @keyframes sp-spin   { to{transform:rotate(360deg)} }
+  @keyframes sp-ticker { from{transform:translateX(100%)} to{transform:translateX(-100%)} }
 
-  /* ── BUTTONS — ink-stamp style, not pill-glow ── */
+  .sp-page { animation: sp-enter 0.25s ease both; }
+
+  /* ── BUTTONS ────────────────────────────────── */
   .sp-btn-primary {
-    background: ${DS.void};
-    color: ${DS.signal};
-    border: 1.5px solid ${DS.signal};
-    border-radius: 3px;
-    font-family: 'Fraunces', serif;
+    background: var(--sp-signal);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-family: 'Inter', sans-serif;
     font-weight: 600;
-    font-style: italic;
-    font-size: 14px;
-    letter-spacing: 0.3px;
+    font-size: 15px;
     cursor: pointer;
-    transition: transform 0.18s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.18s, background 0.18s, color 0.18s;
-    box-shadow: 4px 4px 0 0 ${DS.signal}30;
+    transition: filter 0.15s;
   }
-  .sp-btn-primary:hover { background: ${DS.signal}; color: ${DS.void}; transform: translate(-2px,-2px); box-shadow: 6px 6px 0 0 ${DS.signal}55; }
-  .sp-btn-primary:active { transform: translate(0,0); box-shadow: 2px 2px 0 0 ${DS.signal}55; }
+  .sp-btn-primary:hover:not(:disabled) { filter: brightness(1.1); }
+  .sp-btn-primary:active:not(:disabled) { filter: brightness(0.95); }
+  .sp-btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
 
   .sp-btn-ghost {
     background: transparent;
-    color: ${DS.ash};
-    border: 1px dashed ${DS.rimHov};
-    border-radius: 3px;
+    color: var(--sp-ash);
+    border: 1px solid var(--sp-rim);
+    border-radius: 8px;
     font-family: 'Inter', sans-serif;
     font-weight: 500;
-    font-size: 13px;
-    cursor: pointer;
-    transition: border-color 0.15s, color 0.15s, letter-spacing 0.15s;
-  }
-  .sp-btn-ghost:hover { border-color: ${DS.signal}; border-style: solid; color: ${DS.plat}; letter-spacing: 0.4px; }
-
-  /* ── INPUT — underline only, no boxed field ── */
-  .sp-input {
-    background: transparent;
-    border: none;
-    border-bottom: 1.5px solid ${DS.rim};
-    border-radius: 0;
-    padding: 12px 2px;
-    color: ${DS.plat};
-    font-family: 'Inter', sans-serif;
     font-size: 14px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+  }
+  .sp-btn-ghost:hover { background: var(--sp-surface2); color: var(--sp-plat); border-color: var(--sp-rim); }
+
+  /* ── INPUT ────────────────────────────────── */
+  .sp-input {
+    background: var(--sp-surface2);
+    border: 1.5px solid var(--sp-rim);
+    border-radius: 8px;
+    padding: 11px 14px;
+    color: var(--sp-plat);
+    font-family: 'Inter', sans-serif;
+    font-size: 15px;
     outline: none;
-    transition: border-color 0.25s;
     width: 100%;
+    transition: border-color 0.15s;
   }
-  .sp-input:focus { border-bottom-color: ${DS.signal}; }
-  .sp-input::placeholder { color: ${DS.ghost}; }
+  .sp-input:focus       { border-color: var(--sp-signal); }
+  .sp-input::placeholder { color: var(--sp-ghost); }
+  .sp-input.err          { border-color: var(--sp-live); }
+  select.sp-input { cursor: pointer; appearance: none; }
+  select.sp-input option { background: var(--sp-surface2); color: var(--sp-plat); }
 
-  /* ── CARD — offset double-line, lifts diagonally on hover, not a glass tile ── */
+  /* ── CARD ────────────────────────────────── */
   .sp-card {
-    background: ${DS.surface};
-    border: 1px solid ${DS.rim};
-    border-radius: 2px;
-    box-shadow: 5px 5px 0 0 ${DS.ghost};
-    transition: transform 0.25s cubic-bezier(0.16,1,0.3,1), box-shadow 0.25s, border-color 0.25s;
+    background: var(--sp-surface);
+    border: 1px solid var(--sp-rim);
+    border-radius: 12px;
+    transition: box-shadow 0.15s;
   }
-  .sp-card:hover { transform: translate(-3px,-3px); box-shadow: 8px 8px 0 0 ${DS.signal}40; border-color: ${DS.rimHov}; }
+  .sp-card:hover { box-shadow: 0 2px 12px rgba(0,0,0,0.18); }
 
-  /* ── LIVE BADGE — wax-seal notch shape ── */
+  /* ── LIVE BADGE ──────────────────────────── */
   .sp-live-badge {
     display: inline-flex; align-items: center; gap: 6px;
-    background: ${DS.live}14;
-    border: 1px solid ${DS.live}40;
-    clip-path: polygon(6px 0,100% 0,100% 100%,6px 100%,0 50%);
-    padding: 3px 10px 3px 14px;
+    background: var(--sp-live);
+    border-radius: 4px;
+    padding: 2px 8px;
     font-family: 'JetBrains Mono', monospace;
-    font-size: 10px;
-    font-weight: 500;
-    color: ${DS.live};
-    letter-spacing: 0.5px;
+    font-size: 10px; font-weight: 700;
+    color: #fff; letter-spacing: 1px;
+    text-transform: uppercase;
   }
   .sp-live-dot {
-    width: 5px; height: 5px; border-radius: 50%;
-    background: ${DS.live};
-    animation: sp-live 1.2s infinite;
+    width: 6px; height: 6px; border-radius: 50%;
+    background: #fff;
+    animation: sp-live 1.4s infinite;
+    flex-shrink: 0;
   }
 
-  /* ── TAG — ticket-stub ── */
+  /* ── TAG ─────────────────────────────────── */
   .sp-tag {
     display: inline-block;
-    background: ${DS.surface2};
-    border: 1px dashed ${DS.rim};
-    border-radius: 0;
+    background: var(--sp-surface2);
+    border: 1px solid var(--sp-rim);
+    border-radius: 6px;
     padding: 2px 9px;
     font-family: 'JetBrains Mono', monospace;
-    font-size: 10px;
-    color: ${DS.ash};
-    letter-spacing: 0.5px;
+    font-size: 11px; color: var(--sp-ash);
   }
 
-  /* ── TICKER ── */
-  .sp-ticker-wrap {
-    overflow: hidden;
-    white-space: nowrap;
-    border-top: 1px solid ${DS.rim};
-    border-bottom: 1px solid ${DS.rim};
-    background: ${DS.surface};
-    padding: 9px 0;
-  }
-  .sp-ticker-inner {
-    display: inline-block;
-    animation: sp-ticker 28s linear infinite;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 11px;
-    color: ${DS.ash};
-    padding-right: 60px;
-  }
-
-  /* ── MODE SWITCHER — carved groove, not rounded pill ── */
+  /* ── TAB RAIL ────────────────────────────── */
   .sp-mode-rail {
     display: inline-flex;
-    background: ${DS.void};
-    border: 1px solid ${DS.rim};
-    border-radius: 3px;
-    padding: 3px;
-    gap: 2px;
+    background: var(--sp-surface2);
+    border: 1px solid var(--sp-rim);
+    border-radius: 10px;
+    padding: 3px; gap: 2px;
   }
   .sp-mode-btn {
-    padding: 8px 20px;
-    border-radius: 2px;
-    border: none;
-    font-family: 'Fraunces', serif;
-    font-style: italic;
-    font-weight: 600;
-    font-size: 13px;
-    cursor: pointer;
-    transition: all 0.25s cubic-bezier(0.34,1.56,0.64,1);
-    letter-spacing: 0.3px;
+    border-radius: 8px; border: none;
+    font-family: 'Inter', sans-serif;
+    font-weight: 600; font-size: 14px;
+    cursor: pointer; padding: 8px 18px;
+    transition: background 0.15s, color 0.15s;
   }
-  .sp-mode-btn.on  { background: ${DS.signal}; color: ${DS.void}; }
-  .sp-mode-btn.off { background: transparent; color: ${DS.ash}; }
-  .sp-mode-btn.off:hover { color: ${DS.plat}; }
+  .sp-mode-btn.on  { background: var(--sp-signal); color: #fff; }
+  .sp-mode-btn.off { background: transparent; color: var(--sp-ash); }
+  .sp-mode-btn.off:hover { background: var(--sp-surface); color: var(--sp-plat); }
 
-  /* ── RESPONSIVE ── */
+  /* ── NAV ACTIVE INDICATOR ─────────────────── */
+  .sp-nav-item { position: relative; }
+  .sp-nav-item.active { color: var(--sp-signal) !important; }
+  .sp-nav-item.active::after {
+    content: '';
+    position: absolute;
+    bottom: -8px; left: 50%;
+    transform: translateX(-50%);
+    width: 4px; height: 4px; border-radius: 50%;
+    background: var(--sp-signal);
+  }
+
+  /* ── TICKER ──────────────────────────────── */
+  .sp-ticker { overflow: hidden; border-top: 1px solid var(--sp-rim); background: var(--sp-surface); padding: 8px 0; }
+  .sp-ticker-inner { display: inline-block; animation: sp-ticker 30s linear infinite; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--sp-ash); padding-right: 60px; white-space: nowrap; }
+
+  /* ── RESPONSIVE ──────────────────────────── */
   .hide-mobile { display: flex; }
   .show-mobile { display: none; }
   @media (max-width: 768px) {
     .hide-mobile { display: none !important; }
     .show-mobile { display: flex !important; }
     .games-grid  { grid-template-columns: 1fr 1fr !important; }
-    .hero-title  { font-size: clamp(48px,15vw,88px) !important; }
+    .hero-title  { font-size: clamp(42px,12vw,80px) !important; }
     .lb-wins     { display: none !important; }
   }
   @media (max-width: 480px) {
@@ -261,64 +233,25 @@ const GLOBAL_CSS = `
   }
 `;
 
+
 /* ──────────────────────────────────────────
    SCAN LINE — thin lime bar sweeping once on mount
-   Gives a "broadcast signal acquired" feel
+   Removed per design simplification — no entrance flash animations.
 ────────────────────────────────────────── */
 function ScanLine() {
-  const [show, setShow] = useState(true);
-  useEffect(() => {
-    const t = setTimeout(() => setShow(false), 1400);
-    return () => clearTimeout(t);
-  }, []);
-  if (!show) return null;
-  return (
-    <div style={{
-      position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
-      zIndex: 9999, pointerEvents: "none", overflow: "hidden",
-    }}>
-      <div style={{
-        position: "absolute", top: 0, bottom: 0, width: 2,
-        background: `linear-gradient(to bottom, transparent, ${DS.signal}cc, transparent)`,
-        animation: "sp-scan 1.2s cubic-bezier(0.4,0,0.6,1) both",
-      }} />
-    </div>
-  );
+  return null; // kept as a no-op so existing <ScanLine /> calls don't need removing everywhere
 }
 
-/* ──────────────────────────────────────────
-   AMBIENT GRID — static subtle grid lines (no animation, no canvas weight)
-────────────────────────────────────────── */
-function AmbientGrid() {
-  return (
-    <div style={{
-      position: "fixed", inset: 0, zIndex: 0, pointerEvents: "none",
-      backgroundImage: `
-        linear-gradient(${DS.rim} 1px, transparent 1px),
-        linear-gradient(90deg, ${DS.rim} 1px, transparent 1px)
-      `,
-      backgroundSize: "80px 80px",
-      opacity: 0.35,
-      maskImage: "radial-gradient(ellipse 80% 60% at 50% 0%, black 40%, transparent 100%)",
-      WebkitMaskImage: "radial-gradient(ellipse 80% 60% at 50% 0%, black 40%, transparent 100%)",
-    }} />
-  );
-}
+/* AmbientGrid removed — grid lines add visual clutter with no function */
+function AmbientGrid() { return null; }
 
 /* ──────────────────────────────────────────
-   SHIMMER TEXT — signal accent
+   SIGNAL TEXT — flat accent color, no shimmer/gradient
+   (this used to have a hardcoded leftover neon-green #b8ff00 —
+   removed, now just the one brand color, no animation)
 ────────────────────────────────────────── */
 function Signal({ children }) {
-  return (
-    <span style={{
-      background: `linear-gradient(90deg, ${DS.signal} 0%, #b8ff00 40%, ${DS.ice} 70%, ${DS.signal} 100%)`,
-      backgroundSize: "200% auto",
-      WebkitBackgroundClip: "text",
-      WebkitTextFillColor: "transparent",
-      backgroundClip: "text",
-      animation: "sp-ticker 4s linear infinite",
-    }}>{children}</span>
-  );
+  return <span style={{ color: DS.signal }}>{children}</span>;
 }
 
 /* ──────────────────────────────────────────
@@ -366,8 +299,8 @@ function GameCard({ emoji, title, desc, pts, color, delay, index, onClick }) {
     >
       {/* index as editorial serif numeral, not an icon pill */}
       <div style={{
-        fontFamily: "'Fraunces', serif",
-        fontStyle: "italic",
+        fontFamily: "'Space Grotesk', sans-serif",
+        
         fontSize: 30,
         color: hov ? color : DS.ghost,
         minWidth: 36,
@@ -378,7 +311,7 @@ function GameCard({ emoji, title, desc, pts, color, delay, index, onClick }) {
         <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 6 }}>
           <span style={{ fontSize: 17 }}>{emoji}</span>
           <span style={{
-            fontFamily: "'Fraunces', serif",
+            fontFamily: "'Space Grotesk', sans-serif",
             fontWeight: 700,
             fontSize: 16,
             letterSpacing: 0.2,
@@ -653,7 +586,7 @@ function WatchLivePage({ onNavigate, liveCount }) {
             <span style={{ fontSize: 12, color: DS.ash, fontFamily: "'JetBrains Mono',monospace" }}>{streams.length} live rooms</span>
           </div>
           <h1 style={{
-            fontFamily: "'Fraunces', serif",
+            fontFamily: "'Space Grotesk', sans-serif",
             fontWeight: 700,
             fontSize: "clamp(36px,7vw,64px)",
             lineHeight: 0.95,
@@ -671,7 +604,7 @@ function WatchLivePage({ onNavigate, liveCount }) {
           {filters.map(f => (
             <button key={f} onClick={() => setFilter(f)} style={{
               padding: "6px 14px",
-              borderRadius: 8,
+              borderRadius: 14,
               border: `1px solid ${filter === f ? DS.signal + "66" : DS.rim}`,
               background: filter === f ? DS.signal + "12" : "transparent",
               color: filter === f ? DS.signal : DS.ash,
@@ -689,7 +622,7 @@ function WatchLivePage({ onNavigate, liveCount }) {
         {streams.length === 0 ? (
           <div className="sp-card sp-up" style={{ padding: "60px 32px", textAlign: "center", marginBottom: 60 }}>
             <div style={{ fontSize: 36, marginBottom: 16 }}>📡</div>
-            <div style={{ fontFamily: "'Fraunces', serif", fontStyle: "italic", fontWeight: 600, fontSize: 18, marginBottom: 8 }}>
+            <div style={{ fontFamily: "'Space Grotesk', sans-serif",  fontWeight: 600, fontSize: 18, marginBottom: 8 }}>
               Nobody's live right now
             </div>
             <div style={{ fontSize: 13, color: DS.ash }}>
@@ -703,7 +636,7 @@ function WatchLivePage({ onNavigate, liveCount }) {
               {/* Video placeholder */}
               <div style={{
                 aspectRatio: "16/9",
-                background: `linear-gradient(135deg, ${DS.surface2} 0%, #0a0c10 100%)`,
+                background: DS.surface2,
                 position: "relative",
                 display: "flex", alignItems: "center", justifyContent: "center",
                 fontSize: 36,
@@ -716,7 +649,7 @@ function WatchLivePage({ onNavigate, liveCount }) {
                 {/* viewer count */}
                 <div style={{
                   position: "absolute", bottom: 10, right: 10,
-                  background: "rgba(0,0,0,0.7)", borderRadius: 6, padding: "3px 8px",
+                  background: "rgba(0,0,0,0.7)", borderRadius: 14, padding: "3px 8px",
                   fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: DS.plat,
                 }}>👁 {s.viewers || 0}</div>
               </div>
@@ -725,7 +658,7 @@ function WatchLivePage({ onNavigate, liveCount }) {
               <div style={{ padding: "14px 16px" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
                   <div style={{
-                    fontFamily: "'Fraunces', serif",
+                    fontFamily: "'Space Grotesk', sans-serif",
                     fontWeight: 600, fontSize: 14, color: DS.plat,
                   }}>{s.title}</div>
                   <span className="sp-tag">{s.mode === "match" ? "live match" : "solo stream"}</span>
@@ -785,7 +718,7 @@ function GoLivePage({ user, onNavigate, webrtc }) {
       <div style={{ position: "relative", zIndex: 1, paddingTop: 80, minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
         <div className="sp-card" style={{ padding: "40px 48px", textAlign: "center", maxWidth: 360 }}>
           <div style={{ fontSize: 40, marginBottom: 20 }}>📡</div>
-          <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 22, marginBottom: 10 }}>Sign in to go live</div>
+          <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 22, marginBottom: 10 }}>Sign in to go live</div>
           <div style={{ fontSize: 13, color: DS.ash, marginBottom: 28, lineHeight: 1.7 }}>You need an account to broadcast. It takes 30 seconds.</div>
           <button className="sp-btn-primary" style={{ padding: "12px 28px" }} onClick={() => onNavigate("login")}>
             Create account
@@ -801,7 +734,7 @@ function GoLivePage({ user, onNavigate, webrtc }) {
 
         <div className="sp-up" style={{ marginBottom: 32 }}>
           <h1 style={{
-            fontFamily: "'Fraunces', serif", fontWeight: 700,
+            fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700,
             fontSize: "clamp(32px,6vw,54px)", lineHeight: 0.95, letterSpacing: -0.5, marginBottom: 12,
           }}>GO <Signal>LIVE</Signal></h1>
           <p style={{ fontSize: 14, color: DS.ash }}>Broadcast to the crowd, or get matched and play with them watching.</p>
@@ -919,7 +852,7 @@ function GoLivePage({ user, onNavigate, webrtc }) {
             <span className="sp-live-badge" style={{ fontSize: 13, padding: "6px 14px", marginBottom: 20, display: "inline-flex" }}>
               <span className="sp-live-dot" /> YOU ARE LIVE
             </span>
-            <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 20, marginBottom: 8 }}>
+            <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 20, marginBottom: 8 }}>
               {title || "Live session"}
             </div>
             <div style={{ fontSize: 13, color: DS.ash, marginBottom: 24 }}>
@@ -940,6 +873,16 @@ function GoLivePage({ user, onNavigate, webrtc }) {
 ══════════════════════════════════════════════════════ */
 export default function StrangerPlay() {
   const [page, setPage] = useState("home");
+
+  /* ── THEME — toggle between dark and light, persists in localStorage.
+     window.applyTheme is defined at module load, sets data-theme on <html>
+     which flips every CSS variable across Main, GameScreen, GameSection. */
+  const [theme, setTheme] = useState(() => localStorage.getItem("sp_theme") || "dark");
+  const toggleTheme = () => {
+    const next = theme === "dark" ? "light" : "dark";
+    setTheme(next);
+    window.applyTheme(next);
+  };
 
   /* ── HOME SUB-MODE: "watch" | "play" | "golive" ── 
      This is the two-mode system you asked for.
@@ -1142,15 +1085,15 @@ export default function StrangerPlay() {
           style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", flexShrink: 0 }}
         >
           <div style={{
-            width: 26, height: 26, borderRadius: 6,
+            width: 26, height: 26, borderRadius: 14,
             background: DS.signal,
             display: "flex", alignItems: "center", justifyContent: "center",
             fontSize: 12, color: DS.void,
             fontWeight: 900,
-            boxShadow: `0 0 16px ${DS.signal}55`,
+            /* logo: flat, no glow */
           }}>▶</div>
           <span style={{
-            fontFamily: "'Fraunces', serif",
+            fontFamily: "'Space Grotesk', sans-serif",
             fontWeight: 700, fontSize: 17, letterSpacing: 0.3,
             color: DS.plat,
           }}>StrangerPlay</span>
@@ -1169,7 +1112,7 @@ export default function StrangerPlay() {
             <span style={{
               background: DS.gold + "12",
               border: `1px solid ${DS.gold}33`,
-              borderRadius: 8, padding: "4px 10px",
+              borderRadius: 14, padding: "4px 10px",
               fontFamily: "'JetBrains Mono', monospace",
               fontSize: 12, color: DS.gold,
             }}>
@@ -1190,6 +1133,17 @@ export default function StrangerPlay() {
               🪙 {user.coins ?? 0}
             </button>
           )}
+
+          {/* Theme toggle — quick access here, full switch also lives in Settings */}
+          <button
+            onClick={toggleTheme}
+            aria-label="Toggle dark/light mode"
+            title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+            className="sp-btn-ghost"
+            style={{ width: 34, height: 34, padding: 0, fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 10 }}
+          >
+            {theme === "dark" ? "☀️" : "🌙"}
+          </button>
 
           {/* BUG FIX #2: Login button hidden after login. Per latest review:
               no separate Play button here anymore, and a logged-in user sees
@@ -1224,7 +1178,7 @@ export default function StrangerPlay() {
             <span style={{
               fontFamily: "'JetBrains Mono', monospace", fontSize: 11,
               color: DS.gold, background: DS.gold + "12",
-              border: `1px solid ${DS.gold}22`, borderRadius: 6, padding: "3px 8px",
+              border: `1px solid ${DS.gold}22`, borderRadius: 14, padding: "3px 8px",
             }}>{points}pts</span>
           )}
           <button
@@ -1319,7 +1273,7 @@ export default function StrangerPlay() {
               className="hero-title sp-up"
               style={{
                 animationDelay: "0.2s",
-                fontFamily: "'Fraunces', serif",
+                fontFamily: "'Space Grotesk', sans-serif",
                 fontWeight: 700,
                 fontSize: "clamp(64px,14vw,160px)",
                 lineHeight: 0.88,
@@ -1428,7 +1382,7 @@ export default function StrangerPlay() {
                   // six ways to embarrass a stranger
                 </div>
                 <h2 style={{
-                  fontFamily: "'Fraunces', serif",
+                  fontFamily: "'Space Grotesk', sans-serif",
                   fontWeight: 700,
                   fontSize: "clamp(30px,5vw,48px)",
                   letterSpacing: -0.5,
@@ -1484,7 +1438,7 @@ export default function StrangerPlay() {
               background: DS.void,
             }}>
               <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: DS.ash, letterSpacing: 4 }}>// tap to connect</div>
-              <h1 style={{ fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: "clamp(32px,7vw,56px)", letterSpacing: -1, textAlign: "center" }}>
+              <h1 style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: "clamp(32px,7vw,56px)", letterSpacing: -1, textAlign: "center" }}>
                 Talk to a <Signal>stranger</Signal>
               </h1>
               <p style={{ color: DS.ash, fontSize: 13, textAlign: "center", maxWidth: 300, lineHeight: 1.6 }}>
@@ -1519,10 +1473,8 @@ export default function StrangerPlay() {
               <button onClick={startSearch} style={{
                 width: 140, height: 140, borderRadius: "50%",
                 background: DS.signal, border: "none", cursor: "pointer",
-                fontFamily: "'Fraunces', serif", fontWeight: 700,
-                fontSize: 15, color: DS.void,
-                boxShadow: `0 0 40px ${DS.signal}55, 0 0 80px ${DS.signal}22`,
-                animation: "sp-signal 2s infinite",
+                fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700,
+                fontSize: 15, color: "#fff",
               }}>
                 FIND A<br />STRANGER
               </button>
@@ -1545,15 +1497,13 @@ export default function StrangerPlay() {
               justifyContent: "center", height: "100%", gap: 24,
               background: DS.void,
             }}>
-              <div style={{ position: "relative", width: 140, height: 140 }}>
-                <div style={{ position: "absolute", inset: 0, borderRadius: "50%", border: `2px solid transparent`, borderTopColor: DS.signal, borderRightColor: DS.ice, animation: "sp-spin 1s linear infinite" }} />
-                <div style={{ position: "absolute", inset: 14, borderRadius: "50%", border: `1px solid transparent`, borderTopColor: DS.live, animation: "sp-spin 1.6s linear infinite reverse" }} />
-                <div style={{ position: "absolute", inset: 30, borderRadius: "50%", background: DS.surface, border: `1px solid ${DS.rim}`, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 2 }}>
-                  <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, color: DS.signal, letterSpacing: 1 }}>SCAN</div>
-                  <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 16, color: DS.gold }}>{queueTime}s</div>
+              <div style={{ position: "relative", width: 100, height: 100 }}>
+                <div style={{ position: "absolute", inset: 0, borderRadius: "50%", border: `3px solid ${DS.rim}`, borderTopColor: DS.signal, animation: "sp-spin 1s linear infinite" }} />
+                <div style={{ position: "absolute", inset: 14, borderRadius: "50%", background: DS.surface, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 2 }}>
+                  <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 16, color: DS.gold }}>{queueTime}s</div>
                 </div>
               </div>
-              <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: "clamp(22px,5vw,34px)", textAlign: "center" }}>
+              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: "clamp(22px,5vw,34px)", textAlign: "center" }}>
                 Finding your <Signal>match</Signal>
               </div>
               <div style={{ color: DS.ash, fontFamily: "'JetBrains Mono', monospace", fontSize: 11, textAlign: "center" }}>
@@ -1608,12 +1558,10 @@ export default function StrangerPlay() {
                   <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16, background: DS.void }}>
                     {!opponentLeft ? (
                       <>
-                        {/* Animated scan ring — matches the searching ring design language */}
-                        <div style={{ position: "relative", width: 64, height: 64 }}>
-                          <div style={{ position: "absolute", inset: 0, borderRadius: "50%", border: `2px solid transparent`, borderTopColor: DS.signal, animation: "sp-spin 1s linear infinite" }} />
-                          <div style={{ position: "absolute", inset: 10, borderRadius: "50%", border: `1px solid transparent`, borderTopColor: DS.ice, animation: "sp-spin 1.5s linear infinite reverse" }} />
-                          <div style={{ position: "absolute", inset: 20, borderRadius: "50%", background: DS.surface, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                            <span style={{ fontSize: 14 }}>{matchInfo.opponent?.flag || "🌍"}</span>
+                        <div style={{ position: "relative", width: 56, height: 56 }}>
+                          <div style={{ position: "absolute", inset: 0, borderRadius: "50%", border: `3px solid ${DS.rim}`, borderTopColor: DS.signal, animation: "sp-spin 1s linear infinite" }} />
+                          <div style={{ position: "absolute", inset: 12, borderRadius: "50%", background: DS.surface, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                            <span style={{ fontSize: 13 }}>{matchInfo.opponent?.flag || "🌍"}</span>
                           </div>
                         </div>
                         <div style={{ textAlign: "center" }}>
@@ -1625,18 +1573,18 @@ export default function StrangerPlay() {
                       </>
                     ) : (
                       <>
-                        <div style={{ fontFamily: "'Fraunces', serif", fontStyle: "italic", fontSize: 28, color: DS.ash }}>They left.</div>
+                        <div style={{ fontFamily: "'Space Grotesk', sans-serif",  fontSize: 28, color: DS.ash }}>They left.</div>
                         <div style={{ fontSize: 11, color: DS.ghost, fontFamily: "'JetBrains Mono', monospace" }}>tap NEXT for another</div>
                       </>
                     )}
                   </div>
                 )}
 
-                {/* Stranger credential — top left, ticket-stub style */}
+                {/* Stranger credential — top left */}
                 <div style={{ position: "absolute", top: 14, left: 14, zIndex: 5 }}>
                   <div style={{
-                    background: "rgba(13,11,8,0.75)", backdropFilter: "blur(12px)",
-                    border: `1px solid ${DS.rim}`, padding: "5px 12px",
+                    background: DS.void + "c0", backdropFilter: "blur(12px)",
+                    border: `1px solid ${DS.rim}`, borderRadius: 10, padding: "5px 12px",
                     display: "flex", alignItems: "center", gap: 7,
                   }}>
                     <span style={{ fontSize: 13 }}>{matchInfo.opponent?.flag || "🌍"}</span>
@@ -1644,7 +1592,7 @@ export default function StrangerPlay() {
                       {matchInfo.opponent?.username || "stranger"}
                     </span>
                     {webrtc.remoteConnected && (
-                      <span style={{ width: 5, height: 5, borderRadius: "50%", background: DS.signal, boxShadow: `0 0 8px ${DS.signal}`, flexShrink: 0, animation: "sp-signal 2s infinite" }} />
+                      <span style={{ width: 5, height: 5, borderRadius: "50%", background: DS.ice, flexShrink: 0 }} />
                     )}
                   </div>
                 </div>
@@ -1652,17 +1600,16 @@ export default function StrangerPlay() {
                 {/* Points on the line — top right */}
                 <div style={{ position: "absolute", top: 14, right: 14, zIndex: 5 }}>
                   <div style={{
-                    background: "rgba(13,11,8,0.75)", backdropFilter: "blur(12px)",
-                    border: `1px dashed ${DS.rim}`, padding: "4px 10px",
+                    background: DS.void + "c0", backdropFilter: "blur(12px)",
+                    border: `1px solid ${DS.rim}`, borderRadius: 10, padding: "4px 10px",
                     fontFamily: "'JetBrains Mono', monospace", fontSize: 9.5, color: DS.ash, letterSpacing: 1.5,
                   }}>STRANGER</div>
                 </div>
               </div>
 
-              {/* ── DIVIDER — the tear line between the two halves ── */}
+              {/* ── DIVIDER — flat, no glow ── */}
               <div style={{
                 height: 1, flexShrink: 0, background: DS.rim,
-                boxShadow: `0 0 12px 1px ${DS.signal}18`,
                 position: "relative", zIndex: 6,
               }}>
                 {/* Center dot — like a perforation hole on a ticket */}
@@ -1703,7 +1650,7 @@ export default function StrangerPlay() {
                 {/* YOU label — top left */}
                 <div style={{ position: "absolute", top: 14, left: 14, zIndex: 5 }}>
                   <div style={{
-                    background: "rgba(13,11,8,0.75)", backdropFilter: "blur(12px)",
+                    background: DS.void + "c0", backdropFilter: "blur(12px)", borderRadius: 10,
                     border: `1px dashed ${DS.rim}`, padding: "4px 10px",
                     fontFamily: "'JetBrains Mono', monospace", fontSize: 9.5, color: DS.ash, letterSpacing: 1.5,
                   }}>YOU</div>
@@ -1718,7 +1665,7 @@ export default function StrangerPlay() {
                 <div style={{
                   position: "absolute", bottom: 0, left: 0, right: 0, zIndex: 10,
                   padding: "0 16px 16px",
-                  background: "linear-gradient(to top, rgba(13,11,8,0.95) 0%, rgba(13,11,8,0.6) 60%, transparent 100%)",
+                  background: `linear-gradient(to top, ${DS.void}f0 0%, ${DS.void}99 60%, transparent 100%)`,
                 }}>
 
                   {/* Game pills — horizontal scroll on small screens */}
@@ -1792,13 +1739,13 @@ export default function StrangerPlay() {
                       style={{
                         height: 42, padding: "0 28px",
                         background: DS.signal, border: "none", cursor: "pointer",
-                        fontFamily: "'Fraunces', serif", fontWeight: 700, fontStyle: "italic",
+                        fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, 
                         fontSize: 14, color: DS.void, letterSpacing: 0.3,
-                        flexShrink: 0, boxShadow: `4px 4px 0 0 ${DS.signal}40`,
+                        flexShrink: 0,
                         transition: "transform 0.15s, box-shadow 0.15s",
                       }}
-                      onMouseEnter={e => { e.currentTarget.style.transform = "translate(-2px,-2px)"; e.currentTarget.style.boxShadow = `6px 6px 0 0 ${DS.signal}55`; }}
-                      onMouseLeave={e => { e.currentTarget.style.transform = ""; e.currentTarget.style.boxShadow = `4px 4px 0 0 ${DS.signal}40`; }}
+                      onMouseEnter={e => { e.currentTarget.style.filter = "brightness(1.08)"; }}
+                      onMouseLeave={e => { e.currentTarget.style.filter = "none"; }}
                     >
                       NEXT →
                     </button>
@@ -1841,7 +1788,7 @@ export default function StrangerPlay() {
                   zIndex: 30, minWidth: 200, textAlign: "center",
                 }}>
                   <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, color: DS.ash, letterSpacing: 2 }}>WANTS TO PLAY</div>
-                  <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 20, color: DS.signal }}>
+                  <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 20, color: DS.signal }}>
                     {proposedGame.replace(/_/g, " ").toUpperCase()}
                   </div>
                   <div style={{ display: "flex", gap: 8 }}>
@@ -1850,13 +1797,13 @@ export default function StrangerPlay() {
                         socket.emit("acceptGame", { roomId: matchInfo.roomId, game: proposedGame });
                         setProposedGame(null);
                       }}
-                      style={{ background: DS.signal, color: DS.void, border: "none", borderRadius: 8, padding: "9px 20px", fontFamily: "'JetBrains Mono', monospace", fontSize: 12, fontWeight: 700, cursor: "pointer" }}
+                      style={{ background: DS.signal, color: DS.void, border: "none", borderRadius: 14, padding: "9px 20px", fontFamily: "'JetBrains Mono', monospace", fontSize: 12, fontWeight: 700, cursor: "pointer" }}
                     >
                       ACCEPT
                     </button>
                     <button
                       onClick={() => setProposedGame(null)}
-                      style={{ background: "transparent", color: DS.ash, border: `1px solid ${DS.rim}`, borderRadius: 8, padding: "9px 14px", fontSize: 12, cursor: "pointer" }}
+                      style={{ background: "transparent", color: DS.ash, border: `1px solid ${DS.rim}`, borderRadius: 14, padding: "9px 14px", fontSize: 12, cursor: "pointer" }}
                     >
                       Dismiss
                     </button>
@@ -1868,10 +1815,10 @@ export default function StrangerPlay() {
               {opponentLeft && (
                 <div style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: "50%", background: "rgba(0,0,0,0.8)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 14, zIndex: 20 }}>
                   <div style={{ fontSize: 36 }}>👋</div>
-                  <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 20, color: DS.live }}>Stranger left</div>
+                  <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 20, color: DS.live }}>Stranger left</div>
                   <button
                     onClick={startSearch}
-                    style={{ background: DS.signal, color: DS.void, border: "none", borderRadius: 10, padding: "10px 24px", fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 14, cursor: "pointer" }}
+                    style={{ background: DS.signal, color: DS.void, border: "none", borderRadius: 10, padding: "10px 24px", fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 14, cursor: "pointer" }}
                   >
                     Find another →
                   </button>
@@ -1891,7 +1838,7 @@ export default function StrangerPlay() {
             <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: DS.ash, letterSpacing: 4, marginBottom: 12, textTransform: "uppercase" }}>
               // who's winning rn
             </div>
-            <h2 style={{ fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: "clamp(34px,6vw,54px)", letterSpacing: -0.5 }}>
+            <h2 style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: "clamp(34px,6vw,54px)", letterSpacing: -0.5 }}>
               <Signal>Leaderboard</Signal>
             </h2>
           </div>
@@ -1927,7 +1874,7 @@ export default function StrangerPlay() {
       )}
 
       {page === "rewards"  && <Rewards  onNavigate={goTo} />}
-      {page === "settings" && <Settings onNavigate={goTo} user={user} onUserUpdate={handleLogin} />}
+      {page === "settings" && <Settings onNavigate={goTo} user={user} onUserUpdate={handleLogin} theme={theme} onToggleTheme={toggleTheme} />}
       {page === "games"    && <GameSection onBack={() => goTo("home")} myPoints={points} />}
 
       {/* GameScreen — only renders on real match */}
@@ -1986,7 +1933,7 @@ export default function StrangerPlay() {
                 display: "flex", flexDirection: "column", alignItems: "center",
                 cursor: "pointer",
                 color: active ? DS.signal : DS.ash,
-                fontFamily: "'Fraunces', serif",
+                fontFamily: "'Space Grotesk', sans-serif",
                 fontStyle: active ? "italic" : "normal",
                 fontWeight: 600,
                 fontSize: 13,

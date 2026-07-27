@@ -49,31 +49,48 @@ const NOISE_THRESHOLD = 15;
 const CDN_TF    = "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.11.0/dist/tf.min.js";
 const CDN_BLAZE = "https://cdn.jsdelivr.net/npm/@tensorflow-models/blazeface@0.1.0/dist/blazeface.min.js";
 
-const BG = `linear-gradient(to right,#141415 0%,#141415 12.5%,#181819 12.5%,#181819 25%,#1c1d1e 25%,#1c1d1e 37.5%,#212224 37.5%,#212224 50%,#262729 50%,#262729 62.5%,#2b2c2f 62.5%,#2b2c2f 75%,#303235 75%,#303235 87.5%,#36383b 87.5%,#36383b 100%)`;
+/* ── SIMPLE Design System — same CSS-variable tokens as Main/GameScreen.
+   These resolve from :root[data-theme] set by Settings.jsx's toggle,
+   so light/dark mode here is automatic, zero extra code needed. ── */
+const DS = {
+  void:    "var(--sp-void)",
+  surface: "var(--sp-surface)",
+  surface2:"var(--sp-surface2)",
+  rim:     "var(--sp-rim)",
+  plat:    "var(--sp-plat)",
+  ash:     "var(--sp-ash)",
+  ghost:   "var(--sp-ghost)",
+  signal:  "var(--sp-signal)",
+  live:    "var(--sp-live)",
+  ice:     "var(--sp-ice)",
+  gold:    "var(--sp-gold)",
+};
+
+const BG = "var(--sp-void)";
 
 const CSS = `
-@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Syne:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
 *{box-sizing:border-box;margin:0;padding:0;}
-body{color:#f0eeea;font-family:'Syne',sans-serif;}
-@keyframes fadeUp    {from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
-@keyframes pulse     {0%,100%{opacity:1}50%{opacity:.35}}
-@keyframes glowPulse {0%,100%{box-shadow:0 0 20px #00f5a044}50%{box-shadow:0 0 50px #00f5a099}}
-@keyframes spinRing  {to{transform:rotate(360deg)}}
-@keyframes floatUp   {0%{opacity:1;transform:translateY(0)}100%{opacity:0;transform:translateY(-80px)}}
-@keyframes cd        {0%{transform:scale(1.5);opacity:0}15%{opacity:1;transform:scale(1)}85%{opacity:1}100%{transform:scale(.5);opacity:0}}
-@keyframes cardIn    {from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
-@keyframes smileWarn {0%,100%{opacity:1;border-color:rgba(255,77,109,0.9)}50%{opacity:0.4;border-color:rgba(255,77,109,0.2)}}
+body{font-family:'Inter',sans-serif;background:var(--sp-void);color:var(--sp-plat);}
 ::-webkit-scrollbar{width:4px}
-::-webkit-scrollbar-thumb{background:rgba(255,255,255,.08);border-radius:2px}
+::-webkit-scrollbar-thumb{background:var(--sp-rim);border-radius:4px}
+@keyframes fadeUp   {from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+@keyframes pulse    {0%,100%{opacity:1}50%{opacity:.3}}
+@keyframes spinRing {to{transform:rotate(360deg)}}
+@keyframes floatUp  {0%{opacity:1;transform:translateY(0)}100%{opacity:0;transform:translateY(-60px)}}
+@keyframes cd       {0%{transform:scale(1.5);opacity:0}15%{opacity:1;transform:scale(1)}85%{opacity:1}100%{transform:scale(.5);opacity:0}}
+@keyframes smileWarn{0%,100%{opacity:1}50%{opacity:0.15}}
+@keyframes sp-live  {0%,100%{opacity:1}50%{opacity:0.2}}
 `;
 
+
 const ALL_GAMES = [
-  { id:"floppy",       emoji:"🐦", title:"FLOPPY FACE RACE", desc:"your face is the bird. tilt head to dodge pipes. shout to boost.",  color:"#00f5a0", pts:15, tag:"AR · CAMERA",  delay:0    },
-  { id:"dont_laugh",   emoji:"😐", title:"DON'T LAUGH",      desc:"keep a straight face while your stranger loses it.",                 color:"#00d4ff", pts:10, tag:"FACE CAM",     delay:0.06 },
-  { id:"vibe_check",   emoji:"🎭", title:"VIBE CHECK",       desc:"be a grandma, robot, or demon. crowd votes the winner.",             color:"#ff4d6d", pts:12, tag:"CROWD VOTE",   delay:0.12 },
-  { id:"hot_take",     emoji:"🌶️", title:"HOT TAKE",         desc:"wild opinion. react in 5 seconds. crowd judges your face.",         color:"#ffd60a", pts:6,  tag:"QUICK FIRE",   delay:0.18 },
-  { id:"mirror_me",    emoji:"🪞", title:"MIRROR ME",        desc:"copy your stranger's expression exactly. crowd scores the match.",   color:"#a064ff", pts:8,  tag:"CROWD VOTE",   delay:0.24 },
-  { id:"speed_roast",  emoji:"🔥", title:"SPEED ROAST",      desc:"30 seconds. two strangers. crowd picks who got cooked.",            color:"#ff9f43", pts:20, tag:"HIGH STAKES",  delay:0.30 },
+  { id:"floppy",       emoji:"🐦", title:"Floppy Face Race", desc:"your face is the bird. tilt head to dodge pipes. shout to boost.",  color:"var(--sp-signal)", pts:15, tag:"AR · CAMERA",  delay:0    },
+  { id:"dont_laugh",   emoji:"😐", title:"Don't Laugh",      desc:"keep a straight face while your stranger loses it.",                 color:"var(--sp-signal)", pts:10, tag:"FACE CAM",     delay:0.06 },
+  { id:"vibe_check",   emoji:"🎭", title:"Vibe Check",       desc:"be a grandma, robot, or demon. crowd votes the winner.",             color:"var(--sp-live)",   pts:12, tag:"CROWD VOTE",   delay:0.12 },
+  { id:"hot_take",     emoji:"🌶️", title:"Hot Take",         desc:"wild opinion. react in 5 seconds. crowd judges your face.",         color:"var(--sp-gold)",   pts:6,  tag:"QUICK FIRE",   delay:0.18 },
+  { id:"mirror_me",    emoji:"🪞", title:"Mirror Me",        desc:"copy your stranger's expression exactly. crowd scores the match.",   color:"var(--sp-signal)", pts:8,  tag:"CROWD VOTE",   delay:0.24 },
+  { id:"echo",         emoji:"🔊", title:"Echo",             desc:"make a sound — clap, hum, word. stranger has 2 seconds to echo it.", color:"var(--sp-ice)",    pts:18, tag:"AUDIO",        delay:0.30 },
 ];
 
 const DONT_LAUGH_PROMPTS = [
@@ -133,8 +150,8 @@ function randInt(a, b) { return Math.floor(Math.random() * (b - a + 1)) + a; }
 function Spinner({ label }) {
   return (
     <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:14 }}>
-      <div style={{ width:48, height:48, borderRadius:"50%", border:"2px solid transparent", borderTopColor:"#00f5a0", borderRightColor:"#00d4ff", animation:"spinRing 1s linear infinite" }} />
-      <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#444", textAlign:"center", maxWidth:260 }}>{label}</div>
+      <div style={{ width:48, height:48, borderRadius:"50%", border:"2px solid transparent", borderTopColor:"#06d6a0", borderRightColor:"#a855f7", animation:"spinRing 1s linear infinite" }} />
+      <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#6b6b9a", textAlign:"center", maxWidth:260 }}>{label}</div>
     </div>
   );
 }
@@ -142,7 +159,7 @@ function Spinner({ label }) {
 function CountdownOverlay({ n }) {
   return (
     <div style={{ position:"absolute", inset:0, display:"flex", alignItems:"center", justifyContent:"center", background:"rgba(0,0,0,0.6)", zIndex:10, pointerEvents:"none" }}>
-      <div key={n} style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"clamp(80px,20vw,140px)", color:n===0?"#00f5a0":"#fff", textShadow:`0 0 60px ${n===0?"rgba(0,245,160,0.9)":"rgba(255,255,255,0.6)"}`, animation:"cd 1s both", lineHeight:1 }}>
+      <div key={n} style={{ fontFamily:"'Space Grotesk',sans-serif", fontSize:"clamp(80px,20vw,140px)", color:n===0?"#06d6a0":"#fff", textShadow:`0 0 60px ${n===0?"rgba(0,245,160,0.9)":"rgba(255,255,255,0.6)"}`, animation:"cd 1s both", lineHeight:1 }}>
         {n === 0 ? "GO!" : n}
       </div>
     </div>
@@ -156,11 +173,11 @@ function TimerRing({ seconds, total, color }) {
     <div style={{ position:"relative", width:70, height:70, flexShrink:0 }}>
       <svg width="70" height="70" style={{ transform:"rotate(-90deg)" }}>
         <circle cx="35" cy="35" r={r} fill="none" stroke="rgba(255,255,255,0.07)" strokeWidth="3"/>
-        <circle cx="35" cy="35" r={r} fill="none" stroke={danger ? "#ff4d6d" : color} strokeWidth="3"
+        <circle cx="35" cy="35" r={r} fill="none" stroke={danger ? "#ff2442" : color} strokeWidth="3"
           strokeDasharray={circ} strokeDashoffset={circ - circ * (seconds / total)}
           strokeLinecap="round" style={{ transition:"stroke-dashoffset 1s linear, stroke 0.3s" }}/>
       </svg>
-      <div style={{ position:"absolute", inset:0, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"'Bebas Neue',sans-serif", fontSize:22, color:danger?"#ff4d6d":"#f0eeea", animation:danger?"smileWarn 1s infinite":"none" }}>
+      <div style={{ position:"absolute", inset:0, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"'Space Grotesk',sans-serif", fontSize:22, color:danger?"#ff2442":"#eeeeff", animation:danger?"smileWarn 1s infinite":"none" }}>
         {seconds}
       </div>
     </div>
@@ -170,18 +187,18 @@ function TimerRing({ seconds, total, color }) {
 function CrowdPanel({ onReact }) {
   return (
     <div style={{ background:"rgba(255,255,255,0.025)", border:"1px solid rgba(255,255,255,0.06)", borderRadius:14, padding:14 }}>
-      <div style={{ fontSize:10, color:"#444", letterSpacing:3, textTransform:"uppercase", marginBottom:12 }}>👀 crowd</div>
+      <div style={{ fontSize:10, color:"#6b6b9a", letterSpacing:3, textTransform:"uppercase", marginBottom:12 }}>👀 crowd</div>
       {[["🧑","alex_k"],["👩","priya_s"],["🐉","dragonz"]].map(([av,n]) => (
         <div key={n} style={{ display:"flex", alignItems:"center", gap:7, marginBottom:8 }}>
           <div style={{ width:22, height:22, borderRadius:"50%", background:"rgba(255,255,255,0.05)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:11 }}>{av}</div>
-          <span style={{ fontSize:11, color:"#555" }}>{n}</span>
+          <span style={{ fontSize:11, color:"#6b6b9a" }}>{n}</span>
         </div>
       ))}
       <div style={{ fontSize:10, color:"#2a2a2f", marginBottom:10 }}>+81 more</div>
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:5 }}>
         {["😂","🔥","💀","🤣","👏","😮"].map(e => (
           <button key={e} onClick={() => onReact(e)}
-            style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.06)", borderRadius:7, padding:"7px 0", fontSize:15, cursor:"pointer", transition:"transform 0.15s" }}
+            style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.06)", borderRadius:12, padding:"7px 0", fontSize:15, cursor:"pointer", transition:"transform 0.15s" }}
             onMouseEnter={ev => ev.currentTarget.style.transform = "scale(1.2)"}
             onMouseLeave={ev => ev.currentTarget.style.transform = "scale(1)"}>{e}</button>
         ))}
@@ -199,23 +216,23 @@ function FloatingReactions({ list }) {
 function MatchResult({ won, myScore, oppScore, entryFee, onPlayAgain, onBack }) {
   return (
     <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", background:"rgba(9,9,9,0.93)", gap:20, animation:"fadeUp 0.4s both", zIndex:20, padding:24 }}>
-      <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"clamp(44px,10vw,72px)", color:won?"#00f5a0":"#ff4d6d", letterSpacing:4, textShadow:`0 0 40px ${won?"rgba(0,245,160,0.6)":"rgba(255,77,109,0.6)"}`, lineHeight:1 }}>
+      <div style={{ fontFamily:"'Space Grotesk',sans-serif", fontSize:"clamp(44px,10vw,72px)", color:won?"#06d6a0":"#ff2442", letterSpacing:4, textShadow:`0 0 40px ${won?"rgba(0,245,160,0.6)":"rgba(255,77,109,0.6)"}`, lineHeight:1 }}>
         {won ? "YOU WIN 🎉" : "YOU LOST 💀"}
       </div>
       <div style={{ display:"flex", gap:16, flexWrap:"wrap", justifyContent:"center" }}>
-        {[["your score", myScore, "#00f5a0"],["opponent", oppScore, "#ff4d6d"]].map(([l,v,c]) => (
+        {[["your score", myScore, "#06d6a0"],["opponent", oppScore, "#ff2442"]].map(([l,v,c]) => (
           <div key={l} style={{ textAlign:"center", background:"rgba(255,255,255,0.03)", border:"1px solid rgba(255,255,255,0.07)", borderRadius:14, padding:"14px 20px" }}>
-            <div style={{ fontSize:10, color:"#444", letterSpacing:2, textTransform:"uppercase", marginBottom:4 }}>{l}</div>
-            <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:48, color:c, lineHeight:1 }}>{v}</div>
+            <div style={{ fontSize:10, color:"#6b6b9a", letterSpacing:2, textTransform:"uppercase", marginBottom:4 }}>{l}</div>
+            <div style={{ fontFamily:"'Space Grotesk',sans-serif", fontSize:48, color:c, lineHeight:1 }}>{v}</div>
           </div>
         ))}
       </div>
-      <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:14, color:won?"#ffd60a":"#ff4d6d", background:won?"rgba(255,214,10,0.08)":"rgba(255,77,109,0.08)", border:`1px solid ${won?"rgba(255,214,10,0.2)":"rgba(255,77,109,0.2)"}`, borderRadius:12, padding:"10px 24px" }}>
+      <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:14, color:won?"#ffbe0b":"#ff2442", background:won?"rgba(255,214,10,0.08)":"rgba(255,77,109,0.08)", border:`1px solid ${won?"rgba(255,214,10,0.2)":"rgba(255,77,109,0.2)"}`, borderRadius:12, padding:"10px 24px" }}>
         {won ? `+${entryFee} pts earned` : `-${entryFee} pts lost`}
       </div>
       <div style={{ display:"flex", gap:12, flexWrap:"wrap", justifyContent:"center" }}>
-        <button onClick={onPlayAgain} style={{ background:"linear-gradient(135deg,#00f5a0,#00d4ff)", color:"#0a0a0a", border:"none", borderRadius:12, padding:"13px 32px", fontFamily:"'Bebas Neue',sans-serif", fontSize:20, letterSpacing:2, cursor:"pointer" }}>PLAY AGAIN</button>
-        <button onClick={onBack} style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:12, padding:"13px 24px", color:"#555", fontFamily:"'Syne',sans-serif", fontSize:14, cursor:"pointer" }}>← Games</button>
+        <button onClick={onPlayAgain} style={{ background:"linear-gradient(135deg,#7c3aed,#a855f7)", color:"#fff", border:"none", borderRadius:12, padding:"13px 32px", fontFamily:"'Space Grotesk',sans-serif", fontSize:20, letterSpacing:2, cursor:"pointer" }}>PLAY AGAIN</button>
+        <button onClick={onBack} style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:12, padding:"13px 24px", color:"#6b6b9a", fontFamily:"'Inter',sans-serif", fontSize:14, cursor:"pointer" }}>← Games</button>
       </div>
     </div>
   );
@@ -225,7 +242,7 @@ function RoundDots({ wins, losses }) {
   return (
     <div style={{ display:"flex", gap:8 }}>
       {Array.from({ length: 3 }).map((_, i) => {
-        const col = i < wins ? "#00f5a0" : i < wins + losses ? "#ff4d6d" : "rgba(255,255,255,0.08)";
+        const col = i < wins ? "#06d6a0" : i < wins + losses ? "#ff2442" : "rgba(255,255,255,0.08)";
         return <div key={i} style={{ width:16, height:16, borderRadius:"50%", background:col, boxShadow:col.startsWith("#") ? `0 0 8px ${col}` : "none", transition:"all 0.3s" }}/>;
       })}
     </div>
@@ -236,16 +253,16 @@ function GameNav({ title, myPoints, onBack, extra }) {
   return (
     <nav style={{ flexShrink:0, display:"flex", alignItems:"center", justifyContent:"space-between", height:58, padding:"0 clamp(12px,4vw,36px)", background:"rgba(14,14,15,0.92)", backdropFilter:"blur(24px)", borderBottom:"1px solid rgba(255,255,255,0.06)", zIndex:100 }}>
       <div style={{ display:"flex", alignItems:"center", gap:9 }}>
-        <div style={{ width:26, height:26, borderRadius:7, background:"linear-gradient(135deg,#00f5a0,#00d4ff)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, animation:"glowPulse 3s infinite" }}>▶</div>
-        <span style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:20, letterSpacing:3, background:"linear-gradient(90deg,#00f5a0,#00d4ff)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent" }}>StrangerPlay</span>
-        <span style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:"#333", marginLeft:6 }}>// {title}</span>
+        <div style={{ width:26, height:26, borderRadius:12, background:"linear-gradient(135deg,#7c3aed,#a855f7)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, animation:"glowPulse 3s infinite" }}>▶</div>
+        <span style={{ fontFamily:"'Space Grotesk',sans-serif", fontSize:17, fontWeight:800, letterSpacing:1, background:"linear-gradient(90deg,#06d6a0,#a855f7)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent" }}>StrangerPlay</span>
+        <span style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:"#6b6b9a", marginLeft:6 }}>// {title}</span>
       </div>
       <div style={{ display:"flex", alignItems:"center", gap:10 }}>
         {extra}
-        <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#ffd60a", background:"rgba(255,214,10,0.07)", border:"1px solid rgba(255,214,10,0.14)", borderRadius:20, padding:"3px 12px", display:"flex", alignItems:"center", gap:6 }}>
-          <div style={{ width:5, height:5, borderRadius:"50%", background:"#ffd60a", animation:"pulse 2s infinite" }} />{myPoints} pts
+        <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#ffbe0b", background:"rgba(255,214,10,0.07)", border:"1px solid rgba(255,214,10,0.14)", borderRadius:20, padding:"3px 12px", display:"flex", alignItems:"center", gap:6 }}>
+          <div style={{ width:5, height:5, borderRadius:"50%", background:"#ffbe0b", animation:"pulse 2s infinite" }} />{myPoints} pts
         </div>
-        <button onClick={onBack} style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:8, padding:"6px 16px", color:"#555", fontFamily:"'Syne',sans-serif", fontSize:13, cursor:"pointer" }}>← games</button>
+        <button onClick={onBack} style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:12, padding:"6px 16px", color:"#6b6b9a", fontFamily:"'Inter',sans-serif", fontSize:13, cursor:"pointer" }}>← games</button>
       </div>
     </nav>
   );
@@ -255,15 +272,15 @@ function SidebarRounds({ wins, losses, opponent, entryFee, children }) {
   return (
     <div style={{ width:"clamp(140px,20%,200px)", display:"flex", flexDirection:"column", gap:10, flexShrink:0 }}>
       <div style={{ background:"rgba(255,255,255,0.025)", border:"1px solid rgba(255,255,255,0.06)", borderRadius:14, padding:14 }}>
-        <div style={{ fontSize:10, color:"#444", letterSpacing:3, textTransform:"uppercase", marginBottom:12 }}>rounds</div>
+        <div style={{ fontSize:10, color:"#6b6b9a", letterSpacing:3, textTransform:"uppercase", marginBottom:12 }}>rounds</div>
         <RoundDots wins={wins} losses={losses} />
-        <div style={{ fontSize:11, color:"#555", marginTop:10 }}>you {wins}–{losses}<br/><span style={{ color:"#888" }}>{opponent}</span></div>
+        <div style={{ fontSize:11, color:"#6b6b9a", marginTop:10 }}>you {wins}–{losses}<br/><span style={{ color:"#888" }}>{opponent}</span></div>
       </div>
       {entryFee && (
         <div style={{ background:"rgba(255,255,255,0.025)", border:"1px solid rgba(255,255,255,0.06)", borderRadius:14, padding:14 }}>
-          <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:"#444", letterSpacing:2, marginBottom:4 }}>// entry</div>
-          <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:32, color:"#ffd60a", lineHeight:1 }}>{entryFee}</div>
-          <div style={{ fontSize:10, color:"#444", marginTop:2 }}>pts at stake</div>
+          <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:"#6b6b9a", letterSpacing:2, marginBottom:4 }}>// entry</div>
+          <div style={{ fontFamily:"'Space Grotesk',sans-serif", fontSize:32, color:"#ffbe0b", lineHeight:1 }}>{entryFee}</div>
+          <div style={{ fontSize:10, color:"#6b6b9a", marginTop:2 }}>pts at stake</div>
         </div>
       )}
       {children}
@@ -276,40 +293,40 @@ function SidebarRounds({ wins, losses, opponent, entryFee, children }) {
 ═══════════════════════════════════════════════ */
 function Lobby({ onSelect, onBack, myPoints }) {
   return (
-    <div style={{ minHeight:"100vh", background:BG, fontFamily:"'Syne',sans-serif", color:"#f0eeea" }}>
+    <div style={{ minHeight:"100vh", background:DS.void, fontFamily:"'Inter',sans-serif", color:"#eeeeff" }}>
       <style>{CSS}</style>
       <nav style={{ display:"flex", alignItems:"center", justifyContent:"space-between", height:58, padding:"0 clamp(12px,4vw,36px)", background:"rgba(14,14,15,0.92)", backdropFilter:"blur(24px)", borderBottom:"1px solid rgba(255,255,255,0.06)", position:"sticky", top:0, zIndex:100 }}>
         <div style={{ display:"flex", alignItems:"center", gap:9 }}>
-          <div style={{ width:26, height:26, borderRadius:7, background:"linear-gradient(135deg,#00f5a0,#00d4ff)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, animation:"glowPulse 3s infinite" }}>▶</div>
-          <span style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:20, letterSpacing:3, background:"linear-gradient(90deg,#00f5a0,#00d4ff)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent" }}>StrangerPlay</span>
-          <span style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:"#333", marginLeft:6 }}>// pick a game</span>
+          <div style={{ width:26, height:26, borderRadius:12, background:"linear-gradient(135deg,#7c3aed,#a855f7)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, animation:"glowPulse 3s infinite" }}>▶</div>
+          <span style={{ fontFamily:"'Space Grotesk',sans-serif", fontSize:17, fontWeight:800, letterSpacing:1, background:"linear-gradient(90deg,#06d6a0,#a855f7)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent" }}>StrangerPlay</span>
+          <span style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:"#6b6b9a", marginLeft:6 }}>// pick a game</span>
         </div>
         <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-          <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#ffd60a", background:"rgba(255,214,10,0.07)", border:"1px solid rgba(255,214,10,0.14)", borderRadius:20, padding:"3px 12px", display:"flex", alignItems:"center", gap:6 }}>
-            <div style={{ width:5, height:5, borderRadius:"50%", background:"#ffd60a", animation:"pulse 2s infinite" }} />{myPoints} pts
+          <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#ffbe0b", background:"rgba(255,214,10,0.07)", border:"1px solid rgba(255,214,10,0.14)", borderRadius:20, padding:"3px 12px", display:"flex", alignItems:"center", gap:6 }}>
+            <div style={{ width:5, height:5, borderRadius:"50%", background:"#ffbe0b", animation:"pulse 2s infinite" }} />{myPoints} pts
           </div>
-          {onBack && <button onClick={onBack} style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:8, padding:"6px 16px", color:"#555", fontFamily:"'Syne',sans-serif", fontSize:13, cursor:"pointer" }}>← back</button>}
+          {onBack && <button onClick={onBack} style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:12, padding:"6px 16px", color:"#6b6b9a", fontFamily:"'Inter',sans-serif", fontSize:13, cursor:"pointer" }}>← back</button>}
         </div>
       </nav>
       <div style={{ padding:"48px clamp(16px,5vw,60px) 0" }}>
-        <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:"#444", letterSpacing:4, marginBottom:10 }}>// six ways to embarrass a stranger</div>
-        <h1 style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"clamp(36px,7vw,64px)", letterSpacing:2, lineHeight:1, marginBottom:6 }}>PICK A{" "}<span style={{ background:"linear-gradient(90deg,#00f5a0,#00d4ff)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent" }}>GAME</span></h1>
-        <p style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:12, color:"#444", marginBottom:40 }}>entry fee deducted at match start · winner takes both</p>
+        <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:"#6b6b9a", letterSpacing:4, marginBottom:10 }}>// six ways to embarrass a stranger</div>
+        <h1 style={{ fontFamily:"'Space Grotesk',sans-serif", fontSize:"clamp(36px,7vw,64px)", letterSpacing:2, lineHeight:1, marginBottom:6 }}>PICK A{" "}<span style={{ background:"linear-gradient(90deg,#06d6a0,#a855f7)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent" }}>GAME</span></h1>
+        <p style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:12, color:"#6b6b9a", marginBottom:40 }}>entry fee deducted at match start · winner takes both</p>
       </div>
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))", gap:14, padding:"0 clamp(16px,5vw,60px) 80px" }}>
         {ALL_GAMES.map(g => (
           <button key={g.id} onClick={() => onSelect(g.id)}
-            style={{ background:"rgba(255,255,255,0.025)", border:"1px solid rgba(255,255,255,0.07)", borderRadius:16, padding:"24px 20px", cursor:"pointer", textAlign:"left", color:"#f0eeea", transition:"border-color .2s,transform .15s,background .2s", animation:`cardIn .5s ${g.delay}s both`, position:"relative", overflow:"hidden" }}
+            style={{ background:"rgba(255,255,255,0.025)", border:"1px solid rgba(255,255,255,0.07)", borderRadius:16, padding:"24px 20px", cursor:"pointer", textAlign:"left", color:"#eeeeff", transition:"border-color .2s,transform .15s,background .2s", animation:`cardIn .5s ${g.delay}s both`, position:"relative", overflow:"hidden" }}
             onMouseEnter={e => { e.currentTarget.style.borderColor=g.color+"55"; e.currentTarget.style.background=g.color+"08"; e.currentTarget.style.transform="translateY(-2px)"; }}
             onMouseLeave={e => { e.currentTarget.style.borderColor="rgba(255,255,255,0.07)"; e.currentTarget.style.background="rgba(255,255,255,0.025)"; e.currentTarget.style.transform="translateY(0)"; }}>
             <div style={{ position:"absolute", top:-30, right:-30, width:100, height:100, borderRadius:"50%", background:`radial-gradient(circle,${g.color}18,transparent 70%)`, pointerEvents:"none" }} />
             <div style={{ display:"inline-block", fontFamily:"'JetBrains Mono',monospace", fontSize:9, color:g.color, background:g.color+"15", border:`1px solid ${g.color}33`, borderRadius:20, padding:"2px 10px", letterSpacing:1, marginBottom:14 }}>{g.tag}</div>
             <div style={{ fontSize:32, marginBottom:10 }}>{g.emoji}</div>
-            <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"clamp(20px,3vw,26px)", letterSpacing:2, color:g.color, marginBottom:8, lineHeight:1 }}>{g.title}</div>
-            <p style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#555", lineHeight:1.6, marginBottom:16 }}>{g.desc}</p>
+            <div style={{ fontFamily:"'Space Grotesk',sans-serif", fontSize:"clamp(20px,3vw,26px)", letterSpacing:2, color:g.color, marginBottom:8, lineHeight:1 }}>{g.title}</div>
+            <p style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#6b6b9a", lineHeight:1.6, marginBottom:16 }}>{g.desc}</p>
             <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
-              <span style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#ffd60a", background:"rgba(255,214,10,0.08)", border:"1px solid rgba(255,214,10,0.2)", borderRadius:20, padding:"3px 10px" }}>up to +{g.pts}pts</span>
-              <span style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:16, color:g.color, letterSpacing:2 }}>PLAY →</span>
+              <span style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#ffbe0b", background:"rgba(255,214,10,0.08)", border:"1px solid rgba(255,214,10,0.2)", borderRadius:20, padding:"3px 10px" }}>up to +{g.pts}pts</span>
+              <span style={{ fontFamily:"'Space Grotesk',sans-serif", fontSize:16, color:g.color, letterSpacing:2 }}>PLAY →</span>
             </div>
           </button>
         ))}
@@ -542,7 +559,7 @@ function FloppyFaceRace({ onBack, myPoints = 74 }) {
       setNoiseLevel(Math.round(vol));
       if (vol > NOISE_THRESHOLD) {
         state.speed = BOOST_SPEED; state.boosting = true; setBoosting(true);
-        addParticles(state.particles, state.birdX, state.birdY, "#ffd60a", 5);
+        addParticles(state.particles, state.birdX, state.birdY, "#ffbe0b", 5);
       } else {
         state.speed = Math.max(BASE_SPEED, state.speed * BOOST_DECAY);
         state.boosting = state.speed > BASE_SPEED + 0.5;
@@ -562,7 +579,7 @@ function FloppyFaceRace({ onBack, myPoints = 74 }) {
           p.scored = true; state.score++;
           setScore(state.score);
           setOppScore(s => s + (Math.random() > 0.5 ? 1 : 0));
-          addParticles(state.particles, state.birdX, state.birdY, "#ffd60a", 10);
+          addParticles(state.particles, state.birdX, state.birdY, "#ffbe0b", 10);
         }
       });
 
@@ -594,7 +611,7 @@ function FloppyFaceRace({ onBack, myPoints = 74 }) {
         ctx.drawImage(videoRef.current, 0, 0, W, H);
         ctx.restore();
       } else {
-        ctx.fillStyle = "#0a0a0a"; ctx.fillRect(0, 0, W, H);
+        ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, W, H);
       }
       ctx.fillStyle = "rgba(0,0,0,0.30)"; ctx.fillRect(0, 0, W, H);
 
@@ -611,14 +628,14 @@ function FloppyFaceRace({ onBack, myPoints = 74 }) {
         ctx.beginPath(); ctx.roundRect(p.x, bot+10, PIPE_WIDTH, H-bot-10, [8,8,0,0]); ctx.fill();
         ctx.fillRect(p.x-6, bot+4, PIPE_WIDTH+12, 22);
         ctx.strokeStyle = "rgba(0,245,160,0.55)"; ctx.lineWidth = 1.5;
-        ctx.shadowColor = "#00f5a0"; ctx.shadowBlur = 8;
+        ctx.shadowColor = "#06d6a0"; ctx.shadowBlur = 8;
         ctx.strokeRect(p.x, 0, PIPE_WIDTH, p.topH);
         ctx.strokeRect(p.x, bot, PIPE_WIDTH, H-bot);
         ctx.shadowBlur = 0;
       });
 
       /* Draw bird as glowing ring */
-      const birdCol = state.boosting ? "#ffd60a" : "#00f5a0";
+      const birdCol = state.boosting ? "#ffbe0b" : "#06d6a0";
       ctx.save(); ctx.translate(state.birdX, state.birdY);
       ctx.beginPath(); ctx.arc(0, 0, state.birdSize/2+8, 0, Math.PI*2);
       ctx.strokeStyle = birdCol; ctx.lineWidth = 3;
@@ -643,8 +660,8 @@ function FloppyFaceRace({ onBack, myPoints = 74 }) {
       ctx.globalAlpha = 1;
 
       /* HUD */
-      ctx.font = "bold 52px 'Bebas Neue',sans-serif"; ctx.textAlign = "center";
-      ctx.fillStyle = "#fff"; ctx.shadowColor = "#00f5a0"; ctx.shadowBlur = 16;
+      ctx.font = "bold 52px 'Space Grotesk',sans-serif"; ctx.textAlign = "center";
+      ctx.fillStyle = "#fff"; ctx.shadowColor = "#06d6a0"; ctx.shadowBlur = 16;
       ctx.fillText(state.score, W/2, 62); ctx.shadowBlur = 0;
 
       ctx.font = "11px 'JetBrains Mono',monospace"; ctx.textAlign = "left";
@@ -659,7 +676,7 @@ function FloppyFaceRace({ onBack, myPoints = 74 }) {
 
       /* Shout meter */
       const mW=140, mH=10, mx=14, my=H-38;
-      const mCol = vol > NOISE_THRESHOLD ? "#ffd60a" : "#00f5a0";
+      const mCol = vol > NOISE_THRESHOLD ? "#ffbe0b" : "#06d6a0";
       ctx.fillStyle = "rgba(0,0,0,0.45)"; ctx.beginPath(); ctx.roundRect(mx,my,mW,mH,5); ctx.fill();
       ctx.fillStyle = mCol; ctx.shadowColor = mCol; ctx.shadowBlur = vol>NOISE_THRESHOLD ? 14 : 0;
       ctx.beginPath(); ctx.roundRect(mx, my, Math.max(0,Math.min(1,vol/100))*mW, mH, 5); ctx.fill();
@@ -710,11 +727,11 @@ function FloppyFaceRace({ onBack, myPoints = 74 }) {
   const entryFee = Math.max(3, Math.round(myPoints * 0.05));
 
   return (
-    <div style={{ minHeight:"100vh", background:BG, fontFamily:"'Syne',sans-serif", color:"#f0eeea", display:"flex", flexDirection:"column" }}>
+    <div style={{ minHeight:"100vh", background:DS.void, fontFamily:"'Inter',sans-serif", color:"#eeeeff", display:"flex", flexDirection:"column" }}>
       <style>{CSS}</style>
       <video ref={videoRef} style={{ position:"fixed", opacity:0, pointerEvents:"none", width:1, height:1 }} muted playsInline />
       <GameNav title="floppy face race" myPoints={myPoints} onBack={onBack}
-        extra={screen==="playing" ? <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:boosting?"#ffd60a":"#444" }}>🔊 {noiseLevel}</div> : null}
+        extra={screen==="playing" ? <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:boosting?"#ffbe0b":"#444" }}>🔊 {noiseLevel}</div> : null}
       />
       <div style={{ flex:1, display:"flex", gap:12, padding:"clamp(8px,2vw,16px)", minHeight:0 }}>
         <div style={{ flex:1, position:"relative", borderRadius:20, overflow:"hidden", border:"1px solid rgba(255,255,255,0.07)", minHeight:360, background:"#090909" }}>
@@ -728,14 +745,14 @@ function FloppyFaceRace({ onBack, myPoints = 74 }) {
           )}
           {screen==="ready" && (
             <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:20, background:"rgba(9,9,9,0.88)", animation:"fadeUp 0.5s both", padding:24 }}>
-              <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"clamp(30px,6vw,52px)", letterSpacing:3, textAlign:"center", lineHeight:1.1 }}>YOUR FACE IS<br/><span style={{ background:"linear-gradient(90deg,#00f5a0,#00d4ff)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent" }}>THE BIRD</span></div>
-              <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#444", marginBottom:4 }}>{status}</div>
+              <div style={{ fontFamily:"'Space Grotesk',sans-serif", fontSize:"clamp(30px,6vw,52px)", letterSpacing:3, textAlign:"center", lineHeight:1.1 }}>YOUR FACE IS<br/><span style={{ background:"linear-gradient(90deg,#06d6a0,#a855f7)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent" }}>THE BIRD</span></div>
+              <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#6b6b9a", marginBottom:4 }}>{status}</div>
               <div style={{ display:"flex", flexDirection:"column", gap:9, maxWidth:300 }}>
                 {[["↕️","Tilt head UP / DOWN to move"],["📢","Shout to BOOST speed"],["🖱️","Mouse drag also works (fallback)"],["🏆","Outlast the stranger to win"]].map(([ic,tx]) => (
-                  <div key={tx} style={{ display:"flex", alignItems:"center", gap:10 }}><span style={{ fontSize:18 }}>{ic}</span><span style={{ fontSize:13, color:"#555" }}>{tx}</span></div>
+                  <div key={tx} style={{ display:"flex", alignItems:"center", gap:10 }}><span style={{ fontSize:18 }}>{ic}</span><span style={{ fontSize:13, color:"#6b6b9a" }}>{tx}</span></div>
                 ))}
               </div>
-              <button onClick={startGame} style={{ background:"linear-gradient(135deg,#00f5a0,#00d4ff)", color:"#0a0a0a", border:"none", borderRadius:14, padding:"15px 44px", fontFamily:"'Bebas Neue',sans-serif", fontSize:22, letterSpacing:3, cursor:"pointer", boxShadow:"0 0 40px rgba(0,245,160,0.4)", animation:"glowPulse 2.5s infinite" }}>START RACE</button>
+              <button onClick={startGame} style={{ background:"linear-gradient(135deg,#7c3aed,#a855f7)", color:"#fff", border:"none", borderRadius:14, padding:"15px 44px", fontFamily:"'Space Grotesk',sans-serif", fontSize:18, fontWeight:800, letterSpacing:1, cursor:"pointer", boxShadow:"0 4px 24px rgba(168,85,247,0.5)", animation:"glowPulse 2.5s infinite" }}>START RACE</button>
               <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:"#2a2a2f" }}>{OPP_NAME} {OPP_FLAG} IS ALSO LIVE</div>
             </div>
           )}
@@ -746,23 +763,23 @@ function FloppyFaceRace({ onBack, myPoints = 74 }) {
 
         <div style={{ width:"clamp(140px,20%,200px)", display:"flex", flexDirection:"column", gap:10, flexShrink:0 }}>
           <div style={{ background:"rgba(255,255,255,0.025)", border:"1px solid rgba(255,255,255,0.06)", borderRadius:14, padding:14 }}>
-            <div style={{ fontSize:10, color:"#444", letterSpacing:3, textTransform:"uppercase", marginBottom:12 }}>live scores</div>
+            <div style={{ fontSize:10, color:"#6b6b9a", letterSpacing:3, textTransform:"uppercase", marginBottom:12 }}>live scores</div>
             <div style={{ marginBottom:10 }}>
-              <div style={{ fontSize:11, color:"#00f5a0", marginBottom:2 }}>you 🇳🇵</div>
-              <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:40, color:"#00f5a0", lineHeight:1 }}>{score}</div>
+              <div style={{ fontSize:11, color:"#06d6a0", marginBottom:2 }}>you 🇳🇵</div>
+              <div style={{ fontFamily:"'Space Grotesk',sans-serif", fontSize:40, color:"#06d6a0", lineHeight:1 }}>{score}</div>
             </div>
             <div style={{ height:1, background:"rgba(255,255,255,0.05)", marginBottom:10 }} />
             <div>
-              <div style={{ fontSize:11, color:"#ff4d6d", marginBottom:2 }}>{OPP_NAME} {OPP_FLAG}</div>
-              <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:40, color:"#ff4d6d", lineHeight:1 }}>{oppScore}</div>
+              <div style={{ fontSize:11, color:"#ff2442", marginBottom:2 }}>{OPP_NAME} {OPP_FLAG}</div>
+              <div style={{ fontFamily:"'Space Grotesk',sans-serif", fontSize:40, color:"#ff2442", lineHeight:1 }}>{oppScore}</div>
             </div>
           </div>
           <div style={{ background:"rgba(255,255,255,0.025)", border:"1px solid rgba(255,255,255,0.06)", borderRadius:14, padding:14 }}>
-            <div style={{ fontSize:10, color:"#444", letterSpacing:3, textTransform:"uppercase", marginBottom:10 }}>shout meter</div>
-            <div style={{ background:"rgba(255,255,255,0.05)", borderRadius:6, height:8, overflow:"hidden", marginBottom:8 }}>
-              <div style={{ height:"100%", width:`${noiseLevel}%`, background:noiseLevel>NOISE_THRESHOLD?"linear-gradient(90deg,#ffd60a,#ff9f43)":"linear-gradient(90deg,#00f5a0,#00d4ff)", borderRadius:6, transition:"width 0.1s" }} />
+            <div style={{ fontSize:10, color:"#6b6b9a", letterSpacing:3, textTransform:"uppercase", marginBottom:10 }}>shout meter</div>
+            <div style={{ background:"rgba(255,255,255,0.05)", borderRadius:12, height:8, overflow:"hidden", marginBottom:8 }}>
+              <div style={{ height:"100%", width:`${noiseLevel}%`, background:noiseLevel>NOISE_THRESHOLD?"linear-gradient(90deg,#ffbe0b,#ff9f43)":"linear-gradient(90deg,#06d6a0,#a855f7)", borderRadius:12, transition:"width 0.1s" }} />
             </div>
-            <div style={{ fontSize:11, color:noiseLevel>NOISE_THRESHOLD?"#ffd60a":"#444", fontFamily:"'JetBrains Mono',monospace" }}>{noiseLevel>NOISE_THRESHOLD?"⚡ BOOSTING!":noiseLevel+"/100"}</div>
+            <div style={{ fontSize:11, color:noiseLevel>NOISE_THRESHOLD?"#ffbe0b":"#444", fontFamily:"'JetBrains Mono',monospace" }}>{noiseLevel>NOISE_THRESHOLD?"⚡ BOOSTING!":noiseLevel+"/100"}</div>
           </div>
           <CrowdPanel onReact={addReaction} />
         </div>
@@ -916,7 +933,7 @@ function DontLaugh({ onBack, myPoints = 74 }) {
         const my = (ft.cy / vh) * H;
         const r  = (ft.fw / vw) * W / 2 + 12;
         const isSmiling = ft.mouthOpen > SMILE_THRESH;
-        const col = isSmiling ? "#ff4d6d" : "#00f5a0";
+        const col = isSmiling ? "#ff2442" : "#06d6a0";
         ctx.beginPath(); ctx.arc(mx, my, r, 0, Math.PI*2);
         ctx.strokeStyle = col; ctx.lineWidth = 3;
         ctx.shadowColor = col; ctx.shadowBlur = 20; ctx.stroke(); ctx.shadowBlur = 0;
@@ -949,11 +966,11 @@ function DontLaugh({ onBack, myPoints = 74 }) {
   const entryFee = Math.max(3, Math.round(myPoints * 0.03));
 
   return (
-    <div style={{ minHeight:"100vh", background:BG, fontFamily:"'Syne',sans-serif", color:"#f0eeea", display:"flex", flexDirection:"column" }}>
+    <div style={{ minHeight:"100vh", background:DS.void, fontFamily:"'Inter',sans-serif", color:"#eeeeff", display:"flex", flexDirection:"column" }}>
       <style>{CSS}</style>
       <video ref={videoRef} style={{ display:"none" }} muted playsInline />
       <GameNav title="don't laugh" myPoints={myPoints} onBack={onBack}
-        extra={phase==="playing" ? <TimerRing seconds={timer} total={DURATION} color="#00d4ff"/> : null}
+        extra={phase==="playing" ? <TimerRing seconds={timer} total={DURATION} color="#a855f7"/> : null}
       />
       <div style={{ flex:1, display:"flex", gap:12, padding:"clamp(8px,2vw,16px)", minHeight:0 }}>
         <div style={{ flex:1, position:"relative", borderRadius:20, overflow:"hidden", border:"1px solid rgba(255,255,255,0.07)", background:"#090909", minHeight:360 }}>
@@ -969,13 +986,13 @@ function DontLaugh({ onBack, myPoints = 74 }) {
           {phase==="ready" && (
             <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:22, background:"rgba(9,9,9,0.88)", animation:"fadeUp 0.4s both", padding:24 }}>
               <div style={{ fontSize:56 }}>😐</div>
-              <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"clamp(28px,6vw,48px)", letterSpacing:3, color:"#00d4ff", textAlign:"center" }}>DON'T LAUGH</div>
-              <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#444", textAlign:"center", lineHeight:1.8, maxWidth:320 }}>
+              <div style={{ fontFamily:"'Space Grotesk',sans-serif", fontSize:"clamp(28px,6vw,48px)", letterSpacing:3, color:"#a855f7", textAlign:"center" }}>DON'T LAUGH</div>
+              <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#6b6b9a", textAlign:"center", lineHeight:1.8, maxWidth:320 }}>
                 // keep a straight face for {DURATION} seconds<br/>
                 // smile detected = round lost immediately<br/>
                 // best of 3 rounds wins the fee
               </div>
-              <button onClick={() => startRound(1)} style={{ background:"linear-gradient(135deg,#00d4ff,#00f5a0)", color:"#0a0a0a", border:"none", borderRadius:14, padding:"14px 40px", fontFamily:"'Bebas Neue',sans-serif", fontSize:20, letterSpacing:3, cursor:"pointer", boxShadow:"0 0 30px rgba(0,212,255,0.4)", animation:"glowPulse 2.5s infinite" }}>PLAY</button>
+              <button onClick={() => startRound(1)} style={{ background:"linear-gradient(135deg,#7c3aed,#a855f7)", color:"#fff", border:"none", borderRadius:14, padding:"14px 40px", fontFamily:"'Space Grotesk',sans-serif", fontSize:17, fontWeight:800, letterSpacing:1, cursor:"pointer", boxShadow:"0 4px 24px rgba(168,85,247,0.5)", animation:"glowPulse 2.5s infinite" }}>PLAY</button>
             </div>
           )}
 
@@ -983,12 +1000,12 @@ function DontLaugh({ onBack, myPoints = 74 }) {
 
           {phase==="playing" && (
             <>
-              {smiling && <div style={{ position:"absolute", inset:0, border:"4px solid #ff4d6d", borderRadius:20, pointerEvents:"none", animation:"smileWarn 0.3s infinite", zIndex:5 }} />}
+              {smiling && <div style={{ position:"absolute", inset:0, border:"4px solid #ff2442", borderRadius:20, pointerEvents:"none", animation:"smileWarn 0.3s infinite", zIndex:5 }} />}
               <div style={{ position:"absolute", bottom:20, left:0, right:0, display:"flex", justifyContent:"center" }}>
                 <div style={{ background:"rgba(0,0,0,0.75)", backdropFilter:"blur(12px)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:14, padding:"14px 24px", maxWidth:460, textAlign:"center" }}>
-                  <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:"#444", marginBottom:8, letterSpacing:2 }}>// imagine this</div>
-                  <div style={{ fontSize:"clamp(13px,2.5vw,16px)", color:"#f0eeea", lineHeight:1.5 }}>{prompt}</div>
-                  {smiling && <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:22, color:"#ff4d6d", marginTop:8, letterSpacing:2 }}>SMILED! 😂</div>}
+                  <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:"#6b6b9a", marginBottom:8, letterSpacing:2 }}>// imagine this</div>
+                  <div style={{ fontSize:"clamp(13px,2.5vw,16px)", color:"#eeeeff", lineHeight:1.5 }}>{prompt}</div>
+                  {smiling && <div style={{ fontFamily:"'Space Grotesk',sans-serif", fontSize:22, color:"#ff2442", marginTop:8, letterSpacing:2 }}>SMILED! 😂</div>}
                 </div>
               </div>
               <div style={{ position:"absolute", top:16, left:16, fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"rgba(0,212,255,0.7)" }}>round {round}/3</div>
@@ -998,9 +1015,9 @@ function DontLaugh({ onBack, myPoints = 74 }) {
           {phase==="roundresult" && (
             <div style={{ position:"absolute", inset:0, display:"flex", alignItems:"center", justifyContent:"center", background:"rgba(0,0,0,0.82)", animation:"fadeUp 0.3s both", zIndex:10 }}>
               <div style={{ textAlign:"center" }}>
-                <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"clamp(36px,8vw,64px)", color:roundLabel.includes("✓")?"#00f5a0":"#ff4d6d", letterSpacing:3 }}>{roundLabel}</div>
+                <div style={{ fontFamily:"'Space Grotesk',sans-serif", fontSize:"clamp(36px,8vw,64px)", color:roundLabel.includes("✓")?"#06d6a0":"#ff2442", letterSpacing:3 }}>{roundLabel}</div>
                 <div style={{ display:"flex", gap:10, justifyContent:"center", marginTop:12 }}>
-                  {Array.from({length:3}).map((_,i) => { const col=i<wins?"#00f5a0":i<wins+losses?"#ff4d6d":"rgba(255,255,255,0.1)"; return <div key={i} style={{ width:12,height:12,borderRadius:"50%",background:col,boxShadow:col.startsWith("#")?`0 0 8px ${col}`:"none" }}/>; })}
+                  {Array.from({length:3}).map((_,i) => { const col=i<wins?"#06d6a0":i<wins+losses?"#ff2442":"rgba(255,255,255,0.1)"; return <div key={i} style={{ width:12,height:12,borderRadius:"50%",background:col,boxShadow:col.startsWith("#")?`0 0 8px ${col}`:"none" }}/>; })}
                 </div>
               </div>
             </div>
@@ -1101,11 +1118,11 @@ function VibeCheck({ onBack, myPoints = 74 }) {
   const entryFee = Math.max(3, Math.round(myPoints*0.03));
 
   return (
-    <div style={{ minHeight:"100vh", background:BG, fontFamily:"'Syne',sans-serif", color:"#f0eeea", display:"flex", flexDirection:"column" }}>
+    <div style={{ minHeight:"100vh", background:DS.void, fontFamily:"'Inter',sans-serif", color:"#eeeeff", display:"flex", flexDirection:"column" }}>
       <style>{CSS}</style>
       <video ref={videoRef} style={{ display:"none" }} muted playsInline />
       <GameNav title="vibe check" myPoints={myPoints} onBack={onBack}
-        extra={phase==="playing" ? <TimerRing seconds={timer} total={DURATION} color="#ff4d6d"/> : null}
+        extra={phase==="playing" ? <TimerRing seconds={timer} total={DURATION} color="#ff2442"/> : null}
       />
       <div style={{ flex:1, display:"flex", gap:12, padding:"clamp(8px,2vw,16px)", minHeight:0 }}>
         <div style={{ flex:1, position:"relative", borderRadius:20, overflow:"hidden", border:"1px solid rgba(255,255,255,0.07)", background:"#090909", minHeight:360, display:"flex", alignItems:"center", justifyContent:"center" }}>
@@ -1115,28 +1132,28 @@ function VibeCheck({ onBack, myPoints = 74 }) {
           {phase==="ready" && (
             <div style={{ position:"relative", zIndex:2, display:"flex", flexDirection:"column", alignItems:"center", gap:20, padding:24, animation:"fadeUp 0.4s both" }}>
               <div style={{ fontSize:56 }}>🎭</div>
-              <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"clamp(28px,6vw,52px)", letterSpacing:3, color:"#ff4d6d" }}>VIBE CHECK</div>
-              <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#444", textAlign:"center", lineHeight:1.8, maxWidth:340 }}>// you get a vibe to act out<br/>// perform it for {DURATION} seconds<br/>// crowd votes who nailed it</div>
-              <button onClick={()=>startRound(1)} style={{ background:"linear-gradient(135deg,#ff4d6d,#ffd60a)", color:"#0a0a0a", border:"none", borderRadius:14, padding:"14px 40px", fontFamily:"'Bebas Neue',sans-serif", fontSize:20, letterSpacing:3, cursor:"pointer", boxShadow:"0 0 30px rgba(255,77,109,0.4)", animation:"glowPulse 2.5s infinite" }}>PLAY</button>
+              <div style={{ fontFamily:"'Space Grotesk',sans-serif", fontSize:"clamp(28px,6vw,52px)", letterSpacing:3, color:"#ff2442" }}>VIBE CHECK</div>
+              <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#6b6b9a", textAlign:"center", lineHeight:1.8, maxWidth:340 }}>// you get a vibe to act out<br/>// perform it for {DURATION} seconds<br/>// crowd votes who nailed it</div>
+              <button onClick={()=>startRound(1)} style={{ background:"linear-gradient(135deg,#7c3aed,#a855f7)", color:"#fff", border:"none", borderRadius:14, padding:"14px 40px", fontFamily:"'Space Grotesk',sans-serif", fontSize:17, fontWeight:800, letterSpacing:1, cursor:"pointer", boxShadow:"0 4px 24px rgba(168,85,247,0.5)", animation:"glowPulse 2.5s infinite" }}>PLAY</button>
             </div>
           )}
           {phase==="countdown" && <CountdownOverlay n={countdown}/>}
           {phase==="playing" && (
             <div style={{ position:"relative", zIndex:2, display:"flex", flexDirection:"column", alignItems:"center", gap:20, padding:24 }}>
-              <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:"#ff4d6d", letterSpacing:3 }}>// your vibe</div>
-              <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"clamp(24px,5vw,44px)", letterSpacing:2, color:"#f0eeea", textAlign:"center", lineHeight:1.1, maxWidth:500 }}>"{prompt}"</div>
-              <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:12, color:"#444" }}>act it out. crowd is watching.</div>
+              <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:"#ff2442", letterSpacing:3 }}>// your vibe</div>
+              <div style={{ fontFamily:"'Space Grotesk',sans-serif", fontSize:"clamp(24px,5vw,44px)", letterSpacing:2, color:"#eeeeff", textAlign:"center", lineHeight:1.1, maxWidth:500 }}>"{prompt}"</div>
+              <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:12, color:"#6b6b9a" }}>act it out. crowd is watching.</div>
             </div>
           )}
           {phase==="voting" && (
             <div style={{ position:"relative", zIndex:2, width:"100%", maxWidth:440, padding:"0 24px", animation:"fadeUp 0.3s both" }}>
-              <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#ffd60a", letterSpacing:2, marginBottom:20, textAlign:"center" }}>// crowd is voting · {voteTimer}s</div>
+              <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:"#ffbe0b", letterSpacing:2, marginBottom:20, textAlign:"center" }}>// crowd is voting · {voteTimer}s</div>
               <div style={{ background:"rgba(0,0,0,0.65)", backdropFilter:"blur(12px)", borderRadius:16, padding:24, border:"1px solid rgba(255,255,255,0.08)" }}>
-                {[["you 🇳🇵",myVote,"#00f5a0"],[`${OPP} ${OPP_FLAG}`,oppVote,"#ff4d6d"]].map(([l,v,c]) => (
+                {[["you 🇳🇵",myVote,"#06d6a0"],[`${OPP} ${OPP_FLAG}`,oppVote,"#ff2442"]].map(([l,v,c]) => (
                   <div key={l} style={{ marginBottom:16 }}>
                     <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:6, color:c }}><span>{l}</span><span style={{ fontFamily:"'JetBrains Mono',monospace" }}>{v}%</span></div>
-                    <div style={{ background:"rgba(255,255,255,0.06)", borderRadius:4, height:10, overflow:"hidden" }}>
-                      <div style={{ height:"100%", borderRadius:4, width:`${v}%`, background:`linear-gradient(90deg,${c},${c}88)`, transition:"width 0.25s" }}/>
+                    <div style={{ background:"rgba(255,255,255,0.06)", borderRadius:12, height:10, overflow:"hidden" }}>
+                      <div style={{ height:"100%", borderRadius:12, width:`${v}%`, background:`linear-gradient(90deg,${c},${c}88)`, transition:"width 0.25s" }}/>
                     </div>
                   </div>
                 ))}
@@ -1146,9 +1163,9 @@ function VibeCheck({ onBack, myPoints = 74 }) {
           {phase==="roundresult" && (
             <div style={{ position:"absolute", inset:0, display:"flex", alignItems:"center", justifyContent:"center", background:"rgba(0,0,0,0.85)", animation:"fadeUp 0.3s both", zIndex:10 }}>
               <div style={{ textAlign:"center" }}>
-                <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"clamp(36px,8vw,64px)", color:roundWon?"#00f5a0":"#ff4d6d", letterSpacing:3 }}>{roundWon?"CROWD LOVED IT 🔥":"DIDN'T BUY IT 💀"}</div>
+                <div style={{ fontFamily:"'Space Grotesk',sans-serif", fontSize:"clamp(36px,8vw,64px)", color:roundWon?"#06d6a0":"#ff2442", letterSpacing:3 }}>{roundWon?"CROWD LOVED IT 🔥":"DIDN'T BUY IT 💀"}</div>
                 <div style={{ display:"flex", gap:10, justifyContent:"center", marginTop:12 }}>
-                  {Array.from({length:3}).map((_,i)=>{const col=i<wins?"#00f5a0":i<wins+losses?"#ff4d6d":"rgba(255,255,255,0.1)";return <div key={i} style={{ width:12,height:12,borderRadius:"50%",background:col }}/>;})}
+                  {Array.from({length:3}).map((_,i)=>{const col=i<wins?"#06d6a0":i<wins+losses?"#ff2442":"rgba(255,255,255,0.1)";return <div key={i} style={{ width:12,height:12,borderRadius:"50%",background:col }}/>;})}
                 </div>
               </div>
             </div>
@@ -1241,11 +1258,11 @@ function HotTake({ onBack, myPoints = 74 }) {
   const entryFee = Math.max(3, Math.round(myPoints*0.03));
 
   return (
-    <div style={{ minHeight:"100vh", background:BG, fontFamily:"'Syne',sans-serif", color:"#f0eeea", display:"flex", flexDirection:"column" }}>
+    <div style={{ minHeight:"100vh", background:DS.void, fontFamily:"'Inter',sans-serif", color:"#eeeeff", display:"flex", flexDirection:"column" }}>
       <style>{CSS}</style>
       <video ref={videoRef} style={{ display:"none" }} muted playsInline/>
       <GameNav title="hot take" myPoints={myPoints} onBack={onBack}
-        extra={phase==="playing"?<TimerRing seconds={timer} total={DURATION} color="#ffd60a"/>:null}
+        extra={phase==="playing"?<TimerRing seconds={timer} total={DURATION} color="#ffbe0b"/>:null}
       />
       <div style={{ flex:1, display:"flex", gap:12, padding:"clamp(8px,2vw,16px)", minHeight:0 }}>
         <div style={{ flex:1, position:"relative", borderRadius:20, overflow:"hidden", border:"1px solid rgba(255,255,255,0.07)", background:"#090909", minHeight:360, display:"flex", alignItems:"center", justifyContent:"center" }}>
@@ -1255,29 +1272,29 @@ function HotTake({ onBack, myPoints = 74 }) {
           {phase==="ready"&&(
             <div style={{ position:"relative",zIndex:2,display:"flex",flexDirection:"column",alignItems:"center",gap:22,padding:24,animation:"fadeUp 0.4s both" }}>
               <div style={{ fontSize:56 }}>🌶️</div>
-              <div style={{ fontFamily:"'Bebas Neue',sans-serif",fontSize:"clamp(28px,6vw,52px)",letterSpacing:3,color:"#ffd60a" }}>HOT TAKE</div>
-              <div style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:11,color:"#444",textAlign:"center",lineHeight:1.8,maxWidth:320 }}>// a spicy opinion appears<br/>// react with your face for {DURATION} seconds<br/>// crowd picks the better reaction</div>
-              <button onClick={()=>startRound(1)} style={{ background:"linear-gradient(135deg,#ffd60a,#ff9f43)",color:"#0a0a0a",border:"none",borderRadius:14,padding:"14px 40px",fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:3,cursor:"pointer",boxShadow:"0 0 30px rgba(255,214,10,0.4)",animation:"glowPulse 2.5s infinite" }}>PLAY</button>
+              <div style={{ fontFamily:"'Space Grotesk',sans-serif",fontSize:"clamp(28px,6vw,52px)",letterSpacing:3,color:"#ffbe0b" }}>HOT TAKE</div>
+              <div style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:11,color:"#6b6b9a",textAlign:"center",lineHeight:1.8,maxWidth:320 }}>// a spicy opinion appears<br/>// react with your face for {DURATION} seconds<br/>// crowd picks the better reaction</div>
+              <button onClick={()=>startRound(1)} style={{ background:"linear-gradient(135deg,#7c3aed,#a855f7)",color:"#fff",border:"none",borderRadius:14,padding:"14px 40px",fontFamily:"'Space Grotesk',sans-serif",fontSize:20,letterSpacing:3,cursor:"pointer",boxShadow:"0 4px 24px rgba(168,85,247,0.5)",animation:"glowPulse 2.5s infinite" }}>PLAY</button>
             </div>
           )}
           {phase==="countdown"&&<CountdownOverlay n={countdown}/>}
           {phase==="playing"&&(
             <div style={{ position:"relative",zIndex:2,display:"flex",flexDirection:"column",alignItems:"center",gap:16,padding:24 }}>
-              <div style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:10,color:"#ffd60a",letterSpacing:3 }}>// hot take alert</div>
+              <div style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:10,color:"#ffbe0b",letterSpacing:3 }}>// hot take alert</div>
               <div style={{ background:"rgba(255,214,10,0.08)",border:"2px solid rgba(255,214,10,0.3)",borderRadius:20,padding:"28px 36px",textAlign:"center",maxWidth:500,boxShadow:"0 0 40px rgba(255,214,10,0.12)" }}>
-                <div style={{ fontFamily:"'Bebas Neue',sans-serif",fontSize:"clamp(26px,5vw,48px)",letterSpacing:2,color:"#ffd60a",lineHeight:1.1 }}>"{prompt}"</div>
+                <div style={{ fontFamily:"'Space Grotesk',sans-serif",fontSize:"clamp(26px,5vw,48px)",letterSpacing:2,color:"#ffbe0b",lineHeight:1.1 }}>"{prompt}"</div>
               </div>
-              <div style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:12,color:"#444" }}>react. crowd is watching your face.</div>
+              <div style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:12,color:"#6b6b9a" }}>react. crowd is watching your face.</div>
             </div>
           )}
           {phase==="voting"&&(
             <div style={{ position:"relative",zIndex:2,width:"100%",maxWidth:420,padding:"0 24px",animation:"fadeUp 0.3s both" }}>
-              <div style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:11,color:"#ffd60a",letterSpacing:2,marginBottom:18,textAlign:"center" }}>// crowd is voting · {voteTimer}s</div>
+              <div style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:11,color:"#ffbe0b",letterSpacing:2,marginBottom:18,textAlign:"center" }}>// crowd is voting · {voteTimer}s</div>
               <div style={{ background:"rgba(0,0,0,0.65)",backdropFilter:"blur(12px)",borderRadius:16,padding:24,border:"1px solid rgba(255,255,255,0.08)" }}>
-                {[["you 🇳🇵",myVote,"#00f5a0"],[`${OPP} ${OPP_FLAG}`,oppVote,"#ff4d6d"]].map(([l,v,c])=>(
+                {[["you 🇳🇵",myVote,"#06d6a0"],[`${OPP} ${OPP_FLAG}`,oppVote,"#ff2442"]].map(([l,v,c])=>(
                   <div key={l} style={{ marginBottom:14 }}>
                     <div style={{ display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:6,color:c }}><span>{l}</span><span style={{ fontFamily:"'JetBrains Mono',monospace" }}>{v}%</span></div>
-                    <div style={{ background:"rgba(255,255,255,0.06)",borderRadius:4,height:10,overflow:"hidden" }}><div style={{ height:"100%",borderRadius:4,width:`${v}%`,background:`linear-gradient(90deg,${c},${c}88)`,transition:"width 0.25s" }}/></div>
+                    <div style={{ background:"rgba(255,255,255,0.06)",borderRadius:12,height:10,overflow:"hidden" }}><div style={{ height:"100%",borderRadius:12,width:`${v}%`,background:`linear-gradient(90deg,${c},${c}88)`,transition:"width 0.25s" }}/></div>
                   </div>
                 ))}
               </div>
@@ -1286,9 +1303,9 @@ function HotTake({ onBack, myPoints = 74 }) {
           {phase==="roundresult"&&(
             <div style={{ position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.85)",animation:"fadeUp 0.3s both",zIndex:10 }}>
               <div style={{ textAlign:"center" }}>
-                <div style={{ fontFamily:"'Bebas Neue',sans-serif",fontSize:"clamp(36px,8vw,64px)",color:roundWon?"#ffd60a":"#ff4d6d",letterSpacing:3 }}>{roundWon?"CROWD LOVED IT 🔥":"NOT CONVINCED 💀"}</div>
+                <div style={{ fontFamily:"'Space Grotesk',sans-serif",fontSize:"clamp(36px,8vw,64px)",color:roundWon?"#ffbe0b":"#ff2442",letterSpacing:3 }}>{roundWon?"CROWD LOVED IT 🔥":"NOT CONVINCED 💀"}</div>
                 <div style={{ display:"flex",gap:10,justifyContent:"center",marginTop:12 }}>
-                  {Array.from({length:3}).map((_,i)=>{const col=i<wins?"#00f5a0":i<wins+losses?"#ff4d6d":"rgba(255,255,255,0.1)";return <div key={i} style={{ width:12,height:12,borderRadius:"50%",background:col }}/>;})}
+                  {Array.from({length:3}).map((_,i)=>{const col=i<wins?"#06d6a0":i<wins+losses?"#ff2442":"rgba(255,255,255,0.1)";return <div key={i} style={{ width:12,height:12,borderRadius:"50%",background:col }}/>;})}
                 </div>
               </div>
             </div>
@@ -1380,7 +1397,7 @@ function MirrorMe({ onBack, myPoints = 74 }) {
   const entryFee = Math.max(3, Math.round(myPoints*0.03));
 
   return (
-    <div style={{ minHeight:"100vh", background:BG, fontFamily:"'Syne',sans-serif", color:"#f0eeea", display:"flex", flexDirection:"column" }}>
+    <div style={{ minHeight:"100vh", background:DS.void, fontFamily:"'Inter',sans-serif", color:"#eeeeff", display:"flex", flexDirection:"column" }}>
       <style>{CSS}</style>
       <video ref={videoRef} style={{ display:"none" }} muted playsInline/>
       <GameNav title="mirror me" myPoints={myPoints} onBack={onBack}
@@ -1394,9 +1411,9 @@ function MirrorMe({ onBack, myPoints = 74 }) {
           {phase==="ready"&&(
             <div style={{ position:"relative",zIndex:2,display:"flex",flexDirection:"column",alignItems:"center",gap:20,padding:24,animation:"fadeUp 0.4s both" }}>
               <div style={{ fontSize:56 }}>🪞</div>
-              <div style={{ fontFamily:"'Bebas Neue',sans-serif",fontSize:"clamp(28px,6vw,52px)",letterSpacing:3,color:"#a064ff" }}>MIRROR ME</div>
-              <div style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:11,color:"#444",textAlign:"center",lineHeight:1.8,maxWidth:340 }}>// a pose instruction appears<br/>// make that face for {POSE_DUR} seconds<br/>// opponent copies for {COPY_DUR} seconds<br/>// AI scores the accuracy</div>
-              <button onClick={()=>startRound(1)} style={{ background:"linear-gradient(135deg,#a064ff,#00d4ff)",color:"#fff",border:"none",borderRadius:14,padding:"14px 40px",fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:3,cursor:"pointer",boxShadow:"0 0 30px rgba(160,100,255,0.4)",animation:"glowPulse 2.5s infinite" }}>PLAY</button>
+              <div style={{ fontFamily:"'Space Grotesk',sans-serif",fontSize:"clamp(28px,6vw,52px)",letterSpacing:3,color:"#a064ff" }}>MIRROR ME</div>
+              <div style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:11,color:"#6b6b9a",textAlign:"center",lineHeight:1.8,maxWidth:340 }}>// a pose instruction appears<br/>// make that face for {POSE_DUR} seconds<br/>// opponent copies for {COPY_DUR} seconds<br/>// AI scores the accuracy</div>
+              <button onClick={()=>startRound(1)} style={{ background:"linear-gradient(135deg,#7c3aed,#a855f7)",color:"#fff",border:"none",borderRadius:14,padding:"14px 40px",fontFamily:"'Space Grotesk',sans-serif",fontSize:20,letterSpacing:3,cursor:"pointer",boxShadow:"0 4px 24px rgba(168,85,247,0.5)",animation:"glowPulse 2.5s infinite" }}>PLAY</button>
             </div>
           )}
           {phase==="countdown"&&<CountdownOverlay n={countdown}/>}
@@ -1404,29 +1421,29 @@ function MirrorMe({ onBack, myPoints = 74 }) {
             <div style={{ position:"relative",zIndex:2,display:"flex",flexDirection:"column",alignItems:"center",gap:16,padding:24 }}>
               <div style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:10,color:"#a064ff",letterSpacing:3 }}>// {subPhase==="pose"?"make this face":"now copy the pose"}</div>
               <div style={{ background:"rgba(160,100,255,0.08)",border:"2px solid rgba(160,100,255,0.3)",borderRadius:20,padding:"24px 32px",textAlign:"center",maxWidth:500 }}>
-                <div style={{ fontFamily:"'Bebas Neue',sans-serif",fontSize:"clamp(22px,4vw,38px)",letterSpacing:2,color:"#c084fc",lineHeight:1.2 }}>{pose}</div>
+                <div style={{ fontFamily:"'Space Grotesk',sans-serif",fontSize:"clamp(22px,4vw,38px)",letterSpacing:2,color:"#c084fc",lineHeight:1.2 }}>{pose}</div>
               </div>
-              <div style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:12,color:"#555" }}>{subPhase==="pose"?"hold the expression until timer ends":"match it as closely as possible"}</div>
-              <div style={{ fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:2,color:subPhase==="pose"?"#a064ff":"#00d4ff",background:subPhase==="pose"?"rgba(160,100,255,0.1)":"rgba(0,212,255,0.1)",border:`1px solid ${subPhase==="pose"?"rgba(160,100,255,0.3)":"rgba(0,212,255,0.3)"}`,borderRadius:10,padding:"8px 20px" }}>
+              <div style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:12,color:"#6b6b9a" }}>{subPhase==="pose"?"hold the expression until timer ends":"match it as closely as possible"}</div>
+              <div style={{ fontFamily:"'Space Grotesk',sans-serif",fontSize:22,letterSpacing:2,color:subPhase==="pose"?"#a064ff":"#a855f7",background:subPhase==="pose"?"rgba(160,100,255,0.1)":"rgba(0,212,255,0.1)",border:`1px solid ${subPhase==="pose"?"rgba(160,100,255,0.3)":"rgba(0,212,255,0.3)"}`,borderRadius:10,padding:"8px 20px" }}>
                 {subPhase==="pose"?"YOUR POSE":"COPY NOW"}
               </div>
             </div>
           )}
           {phase==="roundresult"&&(
             <div style={{ position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.88)",animation:"fadeUp 0.3s both",zIndex:10,flexDirection:"column",gap:20,padding:24 }}>
-              <div style={{ fontFamily:"'Bebas Neue',sans-serif",fontSize:"clamp(32px,7vw,56px)",color:roundWon?"#00f5a0":"#ff4d6d",letterSpacing:3 }}>{roundWon?"BETTER MIRROR 🪞":"LOWER SCORE 💀"}</div>
+              <div style={{ fontFamily:"'Space Grotesk',sans-serif",fontSize:"clamp(32px,7vw,56px)",color:roundWon?"#06d6a0":"#ff2442",letterSpacing:3 }}>{roundWon?"BETTER MIRROR 🪞":"LOWER SCORE 💀"}</div>
               {myAccuracy!==null&&(
                 <div style={{ display:"flex",gap:20,flexWrap:"wrap",justifyContent:"center" }}>
-                  {[["your accuracy",myAccuracy,"#00f5a0"],["opponent",oppAccuracy,"#ff4d6d"]].map(([l,v,c])=>(
+                  {[["your accuracy",myAccuracy,"#06d6a0"],["opponent",oppAccuracy,"#ff2442"]].map(([l,v,c])=>(
                     <div key={l} style={{ textAlign:"center",background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.07)",borderRadius:14,padding:"14px 20px" }}>
-                      <div style={{ fontSize:10,color:"#444",letterSpacing:2,textTransform:"uppercase",marginBottom:4 }}>{l}</div>
-                      <div style={{ fontFamily:"'Bebas Neue',sans-serif",fontSize:44,color:c,lineHeight:1 }}>{v}%</div>
+                      <div style={{ fontSize:10,color:"#6b6b9a",letterSpacing:2,textTransform:"uppercase",marginBottom:4 }}>{l}</div>
+                      <div style={{ fontFamily:"'Space Grotesk',sans-serif",fontSize:44,color:c,lineHeight:1 }}>{v}%</div>
                     </div>
                   ))}
                 </div>
               )}
               <div style={{ display:"flex",gap:10 }}>
-                {Array.from({length:3}).map((_,i)=>{const col=i<wins?"#00f5a0":i<wins+losses?"#ff4d6d":"rgba(255,255,255,0.1)";return <div key={i} style={{ width:12,height:12,borderRadius:"50%",background:col }}/>;})}
+                {Array.from({length:3}).map((_,i)=>{const col=i<wins?"#06d6a0":i<wins+losses?"#ff2442":"rgba(255,255,255,0.1)";return <div key={i} style={{ width:12,height:12,borderRadius:"50%",background:col }}/>;})}
               </div>
             </div>
           )}
@@ -1435,8 +1452,8 @@ function MirrorMe({ onBack, myPoints = 74 }) {
         </div>
         <SidebarRounds wins={wins} losses={losses} opponent={OPP+" "+OPP_FLAG} entryFee={entryFee}>
           <div style={{ background:"rgba(255,255,255,0.025)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:14,padding:14 }}>
-            <div style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:10,color:"#444",letterSpacing:2,marginBottom:6 }}>// phase</div>
-            <div style={{ fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:2,color:"#a064ff" }}>{subPhase==="pose"?"YOU POSE":"YOU COPY"}</div>
+            <div style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:10,color:"#6b6b9a",letterSpacing:2,marginBottom:6 }}>// phase</div>
+            <div style={{ fontFamily:"'Space Grotesk',sans-serif",fontSize:18,letterSpacing:2,color:"#a064ff" }}>{subPhase==="pose"?"YOU POSE":"YOU COPY"}</div>
           </div>
           <CrowdPanel onReact={addReaction}/>
         </SidebarRounds>
@@ -1471,12 +1488,12 @@ export default function GameSection({ onBack, myPoints = 74 }) {
   if (activeGame === "speed_roast") {
     const g = ALL_GAMES.find(x => x.id === "speed_roast");
     return (
-      <div style={{ minHeight:"100vh", background:BG, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", fontFamily:"'Syne',sans-serif", color:"#f0eeea", gap:20, padding:24 }}>
+      <div style={{ minHeight:"100vh", background:DS.void, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", fontFamily:"'Inter',sans-serif", color:"#eeeeff", gap:20, padding:24 }}>
         <style>{CSS}</style>
         <div style={{ fontSize:64 }}>{g.emoji}</div>
-        <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"clamp(36px,8vw,64px)", color:g.color, letterSpacing:3, textAlign:"center" }}>{g.title}</div>
-        <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:12, color:"#444", letterSpacing:2 }}>// being built. check back soon.</div>
-        <button onClick={back} style={{ marginTop:16, fontFamily:"'Bebas Neue',sans-serif", fontSize:18, letterSpacing:2, background:"rgba(255,255,255,0.05)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:10, padding:"12px 32px", color:"#f0eeea", cursor:"pointer" }}>← BACK TO GAMES</button>
+        <div style={{ fontFamily:"'Space Grotesk',sans-serif", fontSize:"clamp(36px,8vw,64px)", color:g.color, letterSpacing:3, textAlign:"center" }}>{g.title}</div>
+        <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:12, color:"#6b6b9a", letterSpacing:2 }}>// being built. check back soon.</div>
+        <button onClick={back} style={{ marginTop:16, fontFamily:"'Space Grotesk',sans-serif", fontSize:18, letterSpacing:2, background:"rgba(255,255,255,0.05)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:10, padding:"12px 32px", color:"#eeeeff", cursor:"pointer" }}>← BACK TO GAMES</button>
       </div>
     );
   }
