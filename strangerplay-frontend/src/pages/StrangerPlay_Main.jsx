@@ -1084,19 +1084,16 @@ export default function StrangerPlay() {
           onClick={() => goTo("home")}
           style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", flexShrink: 0 }}
         >
-          <div style={{
-            width: 26, height: 26, borderRadius: 14,
-            background: DS.signal,
-            display: "flex", alignItems: "center", justifyContent: "center",
-            fontSize: 12, color: DS.void,
-            fontWeight: 900,
-            /* logo: flat, no glow */
-          }}>▶</div>
+          <img
+            src="/logo.svg"
+            alt="Tranzle"
+            style={{ width: 26, height: 26, borderRadius: 14, objectFit: "cover", display: "block" }}
+          />
           <span style={{
             fontFamily: "'Space Grotesk', sans-serif",
             fontWeight: 700, fontSize: 17, letterSpacing: 0.3,
             color: DS.plat,
-          }}>StrangerPlay</span>
+          }}>Tranzle</span>
         </div>
 
         {/* Desktop right section */}

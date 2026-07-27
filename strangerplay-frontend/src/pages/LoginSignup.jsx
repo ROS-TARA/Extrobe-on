@@ -225,11 +225,11 @@ export default function LoginSignup({ onNavigate, onLogin }) {
               Once you add the file, it shows up here with no code changes needed.
             */}
             <img
-              src="/logo.svg" alt="StrangerPlay"
+              src="/logo.svg" alt="Tranzle"
               onError={e => { e.currentTarget.style.display = "none"; }}
               style={{ height: 48, marginBottom: 10, display: "block", margin: "0 auto 10px" }}
             />
-            <div style={{ fontSize: 22, fontWeight: 700, color: DS.plat }}>StrangerPlay</div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: DS.plat }}>Tranzle</div>
             <div style={{ fontSize: 13, color: DS.ash, marginTop: 4 }}>call a stranger · play for points</div>
           </div>
 

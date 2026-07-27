@@ -170,7 +170,7 @@ function PasswordSection({ API }) {
 function AppearanceSection({ theme, onThemeChange }) {
   return (
     <div>
-      <SectionTitle title="Appearance" sub="Choose how StrangerPlay looks for you. Changes apply everywhere instantly." />
+      <SectionTitle title="Appearance" sub="Choose how Tranzle looks for you. Changes apply everywhere instantly." />
 
       <div style={{ fontSize: 12, fontWeight: 600, color: DS.ash, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 10 }}>Theme</div>
       <div style={{ display: "flex", gap: 10, marginBottom: 24 }}>

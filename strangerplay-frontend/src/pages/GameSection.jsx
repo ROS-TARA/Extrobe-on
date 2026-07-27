@@ -253,8 +253,8 @@ function GameNav({ title, myPoints, onBack, extra }) {
   return (
     <nav style={{ flexShrink:0, display:"flex", alignItems:"center", justifyContent:"space-between", height:58, padding:"0 clamp(12px,4vw,36px)", background:"rgba(14,14,15,0.92)", backdropFilter:"blur(24px)", borderBottom:"1px solid rgba(255,255,255,0.06)", zIndex:100 }}>
       <div style={{ display:"flex", alignItems:"center", gap:9 }}>
-        <div style={{ width:26, height:26, borderRadius:12, background:"linear-gradient(135deg,#7c3aed,#a855f7)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, animation:"glowPulse 3s infinite" }}>▶</div>
-        <span style={{ fontFamily:"'Space Grotesk',sans-serif", fontSize:17, fontWeight:800, letterSpacing:1, background:"linear-gradient(90deg,#06d6a0,#a855f7)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent" }}>StrangerPlay</span>
+        <img src="/logo.svg" alt="Tranzle" style={{ width:26, height:26, borderRadius:12, objectFit:"cover", display:"block" }} />
+        <span style={{ fontFamily:"'Space Grotesk',sans-serif", fontSize:17, fontWeight:800, letterSpacing:1, background:"linear-gradient(90deg,#06d6a0,#a855f7)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent" }}>Tranzle</span>
         <span style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:"#6b6b9a", marginLeft:6 }}>// {title}</span>
       </div>
       <div style={{ display:"flex", alignItems:"center", gap:10 }}>
@@ -297,8 +297,8 @@ function Lobby({ onSelect, onBack, myPoints }) {
       <style>{CSS}</style>
       <nav style={{ display:"flex", alignItems:"center", justifyContent:"space-between", height:58, padding:"0 clamp(12px,4vw,36px)", background:"rgba(14,14,15,0.92)", backdropFilter:"blur(24px)", borderBottom:"1px solid rgba(255,255,255,0.06)", position:"sticky", top:0, zIndex:100 }}>
         <div style={{ display:"flex", alignItems:"center", gap:9 }}>
-          <div style={{ width:26, height:26, borderRadius:12, background:"linear-gradient(135deg,#7c3aed,#a855f7)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, animation:"glowPulse 3s infinite" }}>▶</div>
-          <span style={{ fontFamily:"'Space Grotesk',sans-serif", fontSize:17, fontWeight:800, letterSpacing:1, background:"linear-gradient(90deg,#06d6a0,#a855f7)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent" }}>StrangerPlay</span>
+          <img src="/logo.svg" alt="Tranzle" style={{ width:26, height:26, borderRadius:12, objectFit:"cover", display:"block" }} />
+          <span style={{ fontFamily:"'Space Grotesk',sans-serif", fontSize:17, fontWeight:800, letterSpacing:1, background:"linear-gradient(90deg,#06d6a0,#a855f7)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent" }}>Tranzle</span>
           <span style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, color:"#6b6b9a", marginLeft:6 }}>// pick a game</span>
         </div>
         <div style={{ display:"flex", alignItems:"center", gap:10 }}>

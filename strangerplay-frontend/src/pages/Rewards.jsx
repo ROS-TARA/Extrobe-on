@@ -196,7 +196,7 @@ const REWARD_TIERS = [
       { icon: "🌍", text: "Featured on global homepage for 24h" },
       { icon: "🎙️", text: "Host your own crowd rooms (up to 500)" },
       { icon: "🏷️", text: "Custom username tag & profile banner" },
-      { icon: "💬", text: "Your highlights in StrangerPlay's socials" },
+      { icon: "💬", text: "Your highlights in Tranzle's socials" },
       { icon: "🛡️", text: "Verified creator badge" },
       { icon: "📊", text: "Full match analytics dashboard" },
     ],
