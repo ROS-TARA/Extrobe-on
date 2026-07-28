@@ -594,7 +594,7 @@ export default function Rewards({ onNavigate }) {
   const [filterUnlocked, setFilterUnlocked] = useState("all"); // "all" | "unlocked" | "locked"
 
   /*
-    TEACH: onNavigate is a prop passed from the parent (StrangerPlay_Main).
+    TEACH: onNavigate is a prop passed from the parent (Tranzle_Main).
     Props flow DOWN from parent to child. This lets child components
     trigger page navigation without owning the state themselves.
     If this page is viewed standalone (no parent), onNavigate is undefined — 

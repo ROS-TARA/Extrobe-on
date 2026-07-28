@@ -1,5 +1,5 @@
 /**
- * GameScreen.jsx — StrangerPlay
+ * GameScreen.jsx — Tranzle
  *
  * Full live in-match UI for 4 game modes:
  *   Don't Laugh · Vibe Check · Mirror Me · Hot Take
@@ -34,7 +34,7 @@ function socketEmit(event, data) {
    CONSTANTS
 ───────────────────────────────────────────── */
 /* ═══════════════════════════════════════════════════════════════
-   DESIGN SYSTEM — shared with StrangerPlay_Main / GameSection via
+   DESIGN SYSTEM — shared with Tranzle_Main / GameSection via
    CSS variables, so the dark/light toggle in Settings repaints
    this file too, automatically, with zero extra wiring here.
 ════════════════════════════════════════════════════════════════ */

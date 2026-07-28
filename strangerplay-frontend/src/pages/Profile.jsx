@@ -101,7 +101,7 @@ export default function Profile({ onNavigate, user, points: propPoints, onUserUp
   async function saveProfile() {
     setSaving(true); setSaveErr("");
     try {
-      const token = localStorage.getItem("sp_token");
+      const token = localStorage.getItem("tz_token");
       const res = await fetch(`${API}/api/user/profile`, {
         method:"PATCH",
         headers:{ "Content-Type":"application/json", Authorization:`Bearer ${token}` },

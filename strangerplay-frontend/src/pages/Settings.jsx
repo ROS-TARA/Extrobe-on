@@ -140,7 +140,7 @@ function PasswordSection({ API }) {
     if (form.next !== form.confirm) return setErr("Passwords don't match");
     setBusy(true);
     try {
-      const token = localStorage.getItem("sp_token");
+      const token = localStorage.getItem("tz_token");
       const res = await fetch(`${API}/api/auth/change-password`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
@@ -231,7 +231,7 @@ function DangerSection({ API, onNavigate }) {
   const [confirmReset,  setConfirmReset]  = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleteInput,   setDeleteInput]   = useState("");
-  const token = localStorage.getItem("sp_token");
+  const token = localStorage.getItem("tz_token");
 
   async function resetStats() {
     await fetch(`${API}/api/user/reset-stats`, { method: "POST", headers: { Authorization: `Bearer ${token}` } });
@@ -293,7 +293,7 @@ export default function Settings({ onNavigate, user, onUserUpdate }) {
   const [toastErr, setToastErr] = useState(false);
 
   // Theme — reads saved value, calls window.applyTheme() to change globally
-  const [theme, setTheme] = useState(() => localStorage.getItem("sp_theme") || "dark");
+  const [theme, setTheme] = useState(() => localStorage.getItem("tz_theme") || "dark");
   function handleThemeChange(val) {
     setTheme(val);
     if (window.applyTheme) window.applyTheme(val);
@@ -325,7 +325,7 @@ export default function Settings({ onNavigate, user, onUserUpdate }) {
   async function handleSave() {
     setSaving(true);
     try {
-      const token = localStorage.getItem("sp_token");
+      const token = localStorage.getItem("tz_token");
       const res = await fetch(`${API}/api/user/settings`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },

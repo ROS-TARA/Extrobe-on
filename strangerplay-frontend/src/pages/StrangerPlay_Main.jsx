@@ -2,7 +2,6 @@ import { useState, useEffect, useRef } from "react";
 import { socket } from "../socket";
 import Profile from "./Profile";
 import LoginSignup from "./LoginSignup";
-import GameSection from "./GameSection";
 import Rewards from "./Rewards";
 import Settings from "./Settings";
 import GameScreen from "./GameScreen";
@@ -876,7 +875,7 @@ export default function StrangerPlay() {
 
   /* ── THEME — toggle between dark and light, persists in localStorage.
      window.applyTheme is defined at module load, sets data-theme on <html>
-     which flips every CSS variable across Main, GameScreen, GameSection. */
+     which flips every CSS variable across Main and GameScreen. */
   const [theme, setTheme] = useState(() => localStorage.getItem("sp_theme") || "dark");
   const toggleTheme = () => {
     const next = theme === "dark" ? "light" : "dark";
@@ -1872,7 +1871,6 @@ export default function StrangerPlay() {
 
       {page === "rewards"  && <Rewards  onNavigate={goTo} />}
       {page === "settings" && <Settings onNavigate={goTo} user={user} onUserUpdate={handleLogin} theme={theme} onToggleTheme={toggleTheme} />}
-      {page === "games"    && <GameSection onBack={() => goTo("home")} myPoints={points} />}
 
       {/* GameScreen — only renders on real match */}
       {page === "gamescreen" && matchPhase === "connected" && matchInfo ? (

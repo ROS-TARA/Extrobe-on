@@ -1,5 +1,5 @@
 /**
- * server.js — StrangerPlay backend
+ * server.js — Tranzle backend
  *
  * What this file does:
  *   REST API  → signup, signin, profile, leaderboard, match history
@@ -89,7 +89,7 @@ const io = new Server(server, {
 /* ─────────────────────────────────────────────
    MONGODB SCHEMAS
 ───────────────────────────────────────────── */
-mongoose.connect(process.env.MONGO_URI || "mongodb://localhost:27017/strangerplay")
+mongoose.connect(process.env.MONGO_URI || "mongodb://localhost:27017/tranzle")
   .then(() => console.log("✅ MongoDB connected"))
   .catch(e => {
     console.error("❌ MongoDB  ERROR:");
@@ -209,7 +209,7 @@ function safeUser(u) {
      1. Turn on 2-Step Verification on the Gmail account you'll send from
      2. Go to https://myaccount.google.com/apppasswords
      3. Generate an "app password" (16 chars, no spaces)
-     4. In strangerplay-backend/.env add:
+     4. In tranzle-backend/.env add:
           GMAIL_USER=youraddress@gmail.com
           GMAIL_APP_PASS=the16charapppassword
      5. Restart the server
@@ -228,12 +228,12 @@ async function sendResetEmail(toEmail, resetUrl) {
     return;
   }
   await mailer.sendMail({
-    from: `StrangerPlay <${process.env.GMAIL_USER}>`,
+    from: `Tranzle <${process.env.GMAIL_USER}>`,
     to: toEmail,
-    subject: "Reset your StrangerPlay password",
+    subject: "Reset your Tranzle password",
     html: `
       <div style="font-family:sans-serif;background:#0d0b08;color:#f4ede1;padding:32px;border-radius:8px;">
-        <h2 style="color:#c97b3d;">StrangerPlay</h2>
+        <h2 style="color:#c97b3d;">Tranzle</h2>
         <p>Someone requested a password reset for this account. If that wasn't you, ignore this email.</p>
         <p><a href="${resetUrl}" style="display:inline-block;margin-top:12px;padding:10px 20px;background:#c97b3d;color:#0d0b08;text-decoration:none;border-radius:4px;font-weight:bold;">Reset password</a></p>
         <p style="font-size:12px;color:#8a7d68;margin-top:20px;">This link expires in 30 minutes.</p>
@@ -413,7 +413,7 @@ app.post("/api/coins/checkout", auth, async (req, res) => {
       line_items: [{
         price_data: {
           currency: "usd",
-          product_data: { name: `${pkg.coins} StrangerPlay coins` },
+          product_data: { name: `${pkg.coins} Tranzle coins` },
           unit_amount: pkg.usd * 100,
         },
         quantity: 1,
@@ -870,5 +870,5 @@ io.on("connection", (socket) => {
 ───────────────────────────────────────────── */
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
-  console.log(`🚀 StrangerPlay server running on port ${PORT}`);
+  console.log(`🚀 Tranzle server running on port ${PORT}`);
 });

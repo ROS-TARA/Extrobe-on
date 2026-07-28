@@ -145,14 +145,14 @@ export default function LoginSignup({ onNavigate, onLogin }) {
   const [sMsg,        setSMsg]        = useState("");
 
   useEffect(() => {
-    if (localStorage.getItem("sp_token")) onNavigate?.("home");
+    if (localStorage.getItem("tz_token")) onNavigate?.("home");
   }, []);
 
   function switchMode(m) { setMode(m); setStep(1); setLErr({}); setSErr({}); setSMsg(""); }
 
   function saveSession(token, user) {
-    localStorage.setItem("sp_token", token);
-    localStorage.setItem("sp_user", JSON.stringify(user));
+    localStorage.setItem("tz_token", token);
+    localStorage.setItem("tz_user", JSON.stringify(user));
     setDoneUser(user.username || user.name || "");
     onLogin?.(user);
     setDone(true);
@@ -225,9 +225,9 @@ export default function LoginSignup({ onNavigate, onLogin }) {
               Once you add the file, it shows up here with no code changes needed.
             */}
             <img
-              src="/logo.svg" alt="Tranzle"
+              src="/Tranzlelogo.svg" alt="Tranzle"
               onError={e => { e.currentTarget.style.display = "none"; }}
-              style={{ height: 48, marginBottom: 10, display: "block", margin: "0 auto 10px" }}
+              style={{ height: 64, width: "auto", display: "block", margin: "0 auto 12px" }}
             />
             <div style={{ fontSize: 22, fontWeight: 700, color: DS.plat }}>Tranzle</div>
             <div style={{ fontSize: 13, color: DS.ash, marginTop: 4 }}>call a stranger · play for points</div>
