@@ -73,6 +73,11 @@ app.use((req, res, next) => {
    SOCKET.IO
 ───────────────────────────────────────────── */
 const io = new Server(server, {
+  // pingTimeout and pingInterval MUST be at the top level of Server options.
+  // Putting them inside cors:{} is silently ignored — they stay at the default
+  // 20s timeout, which drops international connections mid-ICE-negotiation.
+  pingTimeout:  60000,   // 60s before declaring disconnect (default: 20s)
+  pingInterval: 25000,   // heartbeat every 25s
   cors: {
     origin: (origin, cb) => {
       if (!origin || origin.startsWith("http://localhost") || ALLOWED.includes(origin)) {
@@ -81,8 +86,6 @@ const io = new Server(server, {
       cb(new Error("CORS"));
     },
     methods: ["GET","POST"],
-      pingTimeout: 60000,   // wait 60s before declaring disconnect (default: 20s)
-  pingInterval: 25000, 
   },
 });
 
