@@ -73,11 +73,6 @@ app.use((req, res, next) => {
    SOCKET.IO
 ───────────────────────────────────────────── */
 const io = new Server(server, {
-  // pingTimeout and pingInterval MUST be at the top level of Server options.
-  // Putting them inside cors:{} is silently ignored — they stay at the default
-  // 20s timeout, which drops international connections mid-ICE-negotiation.
-  pingTimeout:  60000,   // 60s before declaring disconnect (default: 20s)
-  pingInterval: 25000,   // heartbeat every 25s
   cors: {
     origin: (origin, cb) => {
       if (!origin || origin.startsWith("http://localhost") || ALLOWED.includes(origin)) {
@@ -86,6 +81,8 @@ const io = new Server(server, {
       cb(new Error("CORS"));
     },
     methods: ["GET","POST"],
+      pingTimeout: 60000,   // wait 60s before declaring disconnect (default: 20s)
+  pingInterval: 25000, 
   },
 });
 
@@ -624,28 +621,56 @@ io.on("connection", (socket) => {
        5. Player1 (offerer) creates RTCPeerConnection and sends offer
   */
   socket.on("queue:join", async ({ gameMode = null } = {}) => {
-    // Remove any existing entry for this socket (prevent double-queueing)
-    const existing = queue.findIndex(p => p.socketId === socket.id);
-    if (existing !== -1) queue.splice(existing, 1);
+    /* ── BUG FIX 1: require authentication ──────────────────────────
+       Before this fix, ANY socket could join the queue — logged out tabs,
+       unauthenticated browsers, bots. socket.userId is set by the "auth"
+       event (JWT verify). If it's missing, the socket never sent a valid
+       token → reject immediately.
+    ─────────────────────────────────────────────────────────────── */
+    if (!socket.userId) {
+      socket.emit("queue:error", "You must be logged in to play.");
+      console.warn(`⛔ queue:join rejected — no auth | socket: ${socket.id}`);
+      return;
+    }
+
+    /* ── BUG FIX 2: remove ALL existing entries for this userId ─────
+       Before this fix, opening 10 tabs meant 10 queue entries, all with
+       the same userId. The server matched any two sockets with different
+       socketIds — so Tab 1 matched Tab 2, Tab 3 matched Tab 4, etc.
+       Same person, different tab = matched with yourself.
+
+       Fix: when a user joins, evict every OTHER socket belonging to the
+       same userId from the queue. One user = one queue slot, always.
+       Also remove any stale entry for this exact socket (double-queue guard).
+    ─────────────────────────────────────────────────────────────── */
+    for (let i = queue.length - 1; i >= 0; i--) {
+      if (queue[i].userId === socket.userId || queue[i].socketId === socket.id) {
+        console.log(`🧹 evicting stale queue entry for userId ${socket.userId} (tab conflict or re-join)`);
+        queue.splice(i, 1);
+      }
+    }
 
     queue.push({
       socketId:  socket.id,
-      userId:    socket.userId   || null,
+      userId:    socket.userId,
       username:  socket.username || `anon_${socket.id.slice(0,6)}`,
       flag:      socket.userFlag || "🌍",
       points:    socket.userPoints || 0,
-      gameMode,  // null — game is chosen AFTER connecting, not before
+      gameMode,
     });
 
     socket.emit("queue:waiting", { position: queue.length });
     console.log(`📋 queue: ${queue.length} waiting`);
 
-    // Match ANY two waiting players — purely on availability.
-    // Game mode is null until both strangers agree on one in the call.
-    // Old behavior (match by gameMode) meant null never matched null because
-    // the server required gameMode equality — and "dontlaugh" default meant
-    // users were dropped straight into Don't Laugh before saying hi.
-    const idx = queue.findIndex(p => p.socketId !== socket.id);
+    /* ── BUG FIX 3: never match two sockets with the same userId ────
+       Even after the eviction above, add a userId check to the find
+       as a second layer of defence — covers race conditions where two
+       tabs emit queue:join within the same event loop tick before the
+       eviction above runs for the second one.
+    ─────────────────────────────────────────────────────────────── */
+    const idx = queue.findIndex(
+      p => p.socketId !== socket.id && p.userId !== socket.userId
+    );
 
     if (idx !== -1) {
       const p2 = queue.splice(idx, 1)[0];
