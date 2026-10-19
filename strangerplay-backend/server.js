@@ -142,11 +142,16 @@ const Match = mongoose.model("Match", MatchSchema);
    HELPERS
 ───────────────────────────────────────────── */
 
+const JWT_SECRET = process.env.JWT_SECRET || "dev_secret";
+if (!process.env.JWT_SECRET) {
+  console.warn("⚠️  JWT_SECRET is not set — using an insecure dev default. Set it in Render before real users sign up.");
+}
+
 // JWT — signs a token that expires in 7 days
 // The frontend saves this in localStorage as sp_token
 // and sends it in headers as Authorization: Bearer <token>
 function signToken(userId) {
-  return jwt.sign({ id: userId }, process.env.JWT_SECRET || "dev_secret", { expiresIn: "7d" });
+  return jwt.sign({ id: userId }, JWT_SECRET, { expiresIn: "7d" });
 }
 
 // Middleware — verifies JWT on protected routes
@@ -154,7 +159,7 @@ function auth(req, res, next) {
   const h = req.headers.authorization;
   if (!h || !h.startsWith("Bearer ")) return res.status(401).json({ error: "no token" });
   try {
-    req.userId = jwt.verify(h.slice(7), process.env.JWT_SECRET || "dev_secret").id;
+    req.userId = jwt.verify(h.slice(7), JWT_SECRET).id;
     next();
   } catch {
     res.status(401).json({ error: "invalid token" });
@@ -564,8 +569,42 @@ function broadcastOnlineCount() {
   io.emit("onlineCount", io.engine.clientsCount);
 }
 
+/* ─────────────────────────────────────────────
+   SOCKET AUTH — runs once per connection, BEFORE the "connection" event
+   The client sends its JWT in the handshake: io(url, { auth: { token } }).
+   Because this finishes before any event handler can fire, socket.userId is
+   already set (or definitely not set) by the time "queue:join" can arrive.
+     - no token        → guest: may connect and spectate, cannot play
+     - valid token     → socket.userId/username/flag/points are set
+     - bad/expired     → still connects as guest, socket.authError is set, and
+                         the client is told via "auth:error" so it can show a
+                         message and send the user to log in again
+───────────────────────────────────────────── */
+io.use(async (socket, next) => {
+  const token = socket.handshake.auth && socket.handshake.auth.token;
+  if (!token || typeof token !== "string") return next();
+  try {
+    const { id } = jwt.verify(token, JWT_SECRET);
+    const user = await User.findById(id).lean();
+    if (!user) {
+      socket.authError = "account not found";
+      return next();
+    }
+    socket.userId     = String(user._id);
+    socket.username   = user.username;
+    socket.userFlag   = user.flag;
+    socket.userPoints = user.points;
+    socket.authUser   = safeUser(user);
+  } catch (e) {
+    socket.authError = e && e.name === "TokenExpiredError" ? "session expired" : "invalid token";
+  }
+  next();
+});
+
 io.on("connection", (socket) => {
-  console.log("🔌 connected:", socket.id);
+  console.log("🔌 connected:", socket.id, socket.userId ? "(authenticated)" : "(guest)");
+  if (socket.userId)         socket.emit("auth:ok", socket.authUser);
+  else if (socket.authError) socket.emit("auth:error", socket.authError);
   broadcastOnlineCount();
 
   // Someone tapped "Start Streaming" / "Find Opponent & Go Live" in GoLivePage
@@ -592,26 +631,6 @@ io.on("connection", (socket) => {
     socket.emit("liveRooms", Array.from(liveStreams.values()));
   });
 
-  /* ─── AUTH (optional for spectating, required for playing) ───
-     After connecting, the frontend sends "auth" with the JWT token.
-     We verify it and attach userId to the socket so we know who they are.
-  */
-  socket.on("auth", async (token) => {
-    try {
-      const { id } = jwt.verify(token, process.env.JWT_SECRET || "dev_secret");
-      socket.userId = id;
-      const user = await User.findById(id).lean();
-      if (user) {
-        socket.username = user.username;
-        socket.userFlag = user.flag;
-        socket.userPoints = user.points;
-        socket.emit("auth:ok", safeUser(user));
-      }
-    } catch {
-      socket.emit("auth:error", "invalid token");
-    }
-  });
-
   /* ─── MATCHMAKING ───────────────────────────────────────────
      Flow:
        1. Player emits "queue:join" with gameMode
@@ -628,7 +647,9 @@ io.on("connection", (socket) => {
        token → reject immediately.
     ─────────────────────────────────────────────────────────────── */
     if (!socket.userId) {
-      socket.emit("queue:error", "You must be logged in to play.");
+      socket.emit("queue:error", socket.authError
+        ? `Your login is no longer valid (${socket.authError}). Please log in again.`
+        : "You must be logged in to play.");
       console.warn(`⛔ queue:join rejected — no auth | socket: ${socket.id}`);
       return;
     }

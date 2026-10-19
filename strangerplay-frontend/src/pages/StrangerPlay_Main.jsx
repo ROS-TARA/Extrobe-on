@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { socket } from "../socket";
+import { socket, reconnectSocket } from "../socket";
 import Profile from "./Profile";
 import LoginSignup from "./LoginSignup";
 import GameSection from "./GameSection";
@@ -892,26 +892,32 @@ export default function StrangerPlay() {
 
   /* ── AUTH — reads from localStorage on mount ── */
   const [user, setUser] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("sp_user")) || null; }
+    try { return JSON.parse(localStorage.getItem("tz_user")) || null; }
     catch { return null; }
   });
   const [points, setPoints] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("sp_user"))?.points ?? 0; }
+    try { return JSON.parse(localStorage.getItem("tz_user"))?.points ?? 0; }
     catch { return 0; }
   });
+
+  // Shown on the play screen when the server rejects the user (not logged in / expired login)
+  const [queueErr, setQueueErr] = useState("");
 
   // BUG FIX #1: handleLogin is now correctly passed as onLogin to LoginSignup
   // Without this, auth state never updates in parent after signup/login
   const handleLogin = (userData) => {
     setUser(userData);
     setPoints(userData?.points ?? 0);
+    setQueueErr("");
+    reconnectSocket(); // new handshake with the fresh tz_token
   };
 
   const handleLogout = () => {
-    localStorage.removeItem("sp_token");
-    localStorage.removeItem("sp_user");
+    localStorage.removeItem("tz_token");
+    localStorage.removeItem("tz_user");
     setUser(null);
     setPoints(0);
+    reconnectSocket(); // drop the authenticated connection
     goTo("home");
   };
 
@@ -947,12 +953,9 @@ export default function StrangerPlay() {
   useEffect(() => {
     socket.on("onlineCount", (n) => setLiveCount(n));
 
-    const doAuth = () => {
-      const token = localStorage.getItem("sp_token");
-      if (token) socket.emit("auth", token);
-    };
-    if (socket.connected) doAuth();
-    socket.on("connect", doAuth);
+    // Auth now happens in the Socket.IO handshake (see socket.js). The server
+    // answers with auth:ok or auth:error right after connecting.
+    socket.on("auth:ok", () => setQueueErr(""));
 
     socket.on("queue:waiting", ({ position }) => {
       console.log("📋 Queue position:", position);
@@ -963,8 +966,10 @@ export default function StrangerPlay() {
     // Send them to the login page instead of silently doing nothing.
     socket.on("queue:error", (msg) => {
       console.warn("⛔ queue:error:", msg);
+      clearInterval(queueTimerRef.current);
+      setQueueTime(0);
       setMatchPhase("idle");
-      setPage("login");
+      setQueueErr(typeof msg === "string" ? msg : "Couldn't join the queue.");
     });
 
     socket.on("match:found", (info) => {
@@ -1001,11 +1006,20 @@ export default function StrangerPlay() {
       setPage("gamescreen");
     });
 
-    socket.on("auth:error", () => console.warn("Socket auth failed"));
+    // Token rejected by the server (expired / invalid / account gone):
+    // clear the dead session so the login page doesn't redirect straight back.
+    socket.on("auth:error", (reason) => {
+      console.warn("Socket auth failed:", reason);
+      localStorage.removeItem("tz_token");
+      localStorage.removeItem("tz_user");
+      setUser(null);
+      setPoints(0);
+      setQueueErr("Your login expired. Please log in again.");
+    });
 
     return () => {
       socket.off("onlineCount");
-      socket.off("connect", doAuth);
+      socket.off("auth:ok");
       socket.off("queue:waiting");
       socket.off("queue:error");
       socket.off("match:found");
@@ -1015,11 +1029,6 @@ export default function StrangerPlay() {
       socket.off("gameStarted");
     };
   }, []);
-
-  useEffect(() => {
-    const token = localStorage.getItem("sp_token");
-    if (token && socket.connected) socket.emit("auth", token);
-  }, [user]);
 
   const webrtc = useWebRTC();
   useEffect(() => {
@@ -1035,7 +1044,7 @@ export default function StrangerPlay() {
   // never on the frontend directly, so this can't be faked into free coins.
   const buyCoins = async () => {
     try {
-      const token = localStorage.getItem("sp_token");
+      const token = localStorage.getItem("tz_token");
       const res = await fetch(`${import.meta.env.VITE_API_URL || "https://extrobe-on.onrender.com"}/api/coins/checkout`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
@@ -1050,6 +1059,15 @@ export default function StrangerPlay() {
   };
 
   const startSearch = () => {
+    if (!localStorage.getItem("tz_token")) {
+      setQueueErr("Log in to play.");
+      return;
+    }
+    if (!socket.connected) {
+      setQueueErr("Not connected to the server yet. Try again in a few seconds.");
+      return;
+    }
+    setQueueErr("");
     setMatchPhase("searching");
     setQueueTime(0);
     setOpponentLeft(false);
@@ -1477,6 +1495,15 @@ export default function StrangerPlay() {
                 <div style={{ background: DS.live + "18", border: `1px solid ${DS.live}44`, borderRadius: 10, padding: "10px 16px", fontSize: 12, color: DS.live, maxWidth: 280, textAlign: "center" }}>{webrtc.camErr}</div>
               )}
 
+              {queueErr && (
+                <div style={{ background: DS.live + "18", border: `1px solid ${DS.live}44`, borderRadius: 10, padding: "10px 16px", fontSize: 12, color: DS.live, maxWidth: 280, textAlign: "center" }}>
+                  {queueErr}
+                  {!localStorage.getItem("tz_token") && (
+                    <div><button onClick={() => goTo("login")} style={{ marginTop: 8, background: "none", border: "none", color: DS.signal, cursor: "pointer", fontSize: 12, textDecoration: "underline" }}>Go to login</button></div>
+                  )}
+                </div>
+              )}
+
               <button onClick={startSearch} style={{
                 width: 140, height: 140, borderRadius: "50%",
                 background: DS.signal, border: "none", cursor: "pointer",
@@ -1901,8 +1928,8 @@ export default function StrangerPlay() {
             const delta = won ? fee : -fee;
             const newPts = Math.max(0, points + delta);
             setPoints(newPts);
-            const saved = JSON.parse(localStorage.getItem("sp_user") || "{}");
-            localStorage.setItem("sp_user", JSON.stringify({ ...saved, points: newPts }));
+            const saved = JSON.parse(localStorage.getItem("tz_user") || "{}");
+            localStorage.setItem("tz_user", JSON.stringify({ ...saved, points: newPts }));
             setMatchPhase("idle");
             setMatchInfo(null);
           }}
