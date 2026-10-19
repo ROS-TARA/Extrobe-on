@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { socket, reconnectSocket } from "../socket";
+import { createPeer, parseIceServers, DEFAULT_ICE } from "../peer";
 import Profile from "./Profile";
 import LoginSignup from "./LoginSignup";
 import GameSection from "./GameSection";
@@ -390,8 +391,7 @@ function useWebRTC() {
   const localRef         = useRef(null);
   const remoteRef        = useRef(null);  // stranger's video element
   const remoteStreamRef  = useRef(null);  // holds the remote MediaStream — survives conditional rendering
-  const pcRef            = useRef(null);  // RTCPeerConnection
-  const pendingICE       = useRef([]);    // ICE candidates queued before remote desc is set
+  const peerRef          = useRef(null);  // active call from peer.js
   const streamRef        = useRef(null);  // ref copy of stream so closures always see it
 
   const [stream,          setStream]          = useState(null);
@@ -399,26 +399,24 @@ function useWebRTC() {
   const [camErr,  setCamErr]  = useState(null);
   const [muted,   setMuted]   = useState(false);
   const [camOff,  setCamOff]  = useState(false);
+  // { phase: "idle"|"signaling"|"connecting"|"connected"|"failed", detail, route }
+  const [callState, setCallState] = useState({ phase: "idle", detail: "" });
 
   /*
-    ICE servers — STUN + 3 free TURN relays from openrelay.metered.ca
-    WHY TURN IS REQUIRED:
-    STUN only discovers your public IP. It fails (~30% of real calls) when
-    both users are behind carrier-grade NAT (mobile data) or different ISPs
-    in different countries. Nepal ↔ Japan will almost always need TURN.
-    TURN acts as a video relay when direct peer-to-peer is impossible.
-    openrelay.metered.ca is a free public TURN server — fine for dev/testing.
-    For production: get your own at metered.ca (free tier = 500MB/month).
+    ICE servers. Override without code changes by setting VITE_ICE_SERVERS on
+    the frontend host to a JSON array, e.g.
+      [{"urls":"stun:stun.l.google.com:19302"},
+       {"urls":"turn:YOUR_TURN_HOST:443?transport=tcp","username":"...","credential":"..."}]
+    STUN alone fails on many mobile / cross-country networks; those need TURN.
+    NOTE: anything in a VITE_ variable is visible to every visitor. Fine for
+    testing; for production, TURN credentials should be issued by the backend.
   */
-  const ICE = [
-    { urls: "stun:stun.l.google.com:19302" },
-    { urls: "stun:stun1.l.google.com:19302" },
-    { urls: "turn:openrelay.metered.ca:80",             username: "openrelayproject", credential: "openrelayproject" },
-    { urls: "turn:openrelay.metered.ca:443",            username: "openrelayproject", credential: "openrelayproject" },
-    { urls: "turn:openrelay.metered.ca:443?transport=tcp", username: "openrelayproject", credential: "openrelayproject" },
-  ];
+  const ICE = parseIceServers(import.meta.env.VITE_ICE_SERVERS) || DEFAULT_ICE;
 
+  // Resolves true once a live camera+mic stream exists (reuses an existing one).
   async function startCamera() {
+    const cur = streamRef.current;
+    if (cur && cur.getTracks().some(t => t.readyState === "live")) return true;
     try {
       const s = await navigator.mediaDevices.getUserMedia({
         video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" },
@@ -428,10 +426,12 @@ function useWebRTC() {
       setStream(s);
       if (localRef.current) { localRef.current.srcObject = s; localRef.current.play().catch(() => {}); }
       setCamErr(null);
+      return true;
     } catch (e) {
       setCamErr(e.name === "NotAllowedError"
         ? "Camera blocked — allow access in browser settings."
         : "Can't open camera: " + e.message);
+      return false;
     }
   }
 
@@ -455,90 +455,37 @@ function useWebRTC() {
 
   /*
     setupPeerConnection — call this the moment match:found fires.
-    Creates RTCPeerConnection, adds local tracks, wires ICE + signaling.
-    role === "offer"  → we create the offer immediately
-    role === "answer" → we wait for the incoming offer via socket
-    Returns a cleanup function that removes all socket listeners.
+    The call logic lives in peer.js (ready-gated signaling, ICE buffering,
+    ICE restart, timeout). This just connects it to React state.
+    Returns a cleanup function.
   */
   function setupPeerConnection(roomId, role) {
     closePeer();
-    pendingICE.current = [];
-
-    const pc = new RTCPeerConnection({ iceServers: ICE });
-    pcRef.current = pc;
-
-    // Add our camera/mic tracks so the remote peer receives them
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(t => pc.addTrack(t, streamRef.current));
-    }
-
-    // Remote tracks arrive → attach to the stranger's <video> element.
-    // CRITICAL: also store in remoteStreamRef because the <video> element is
-    // conditionally rendered (only shows after remoteConnected=true).
-    // Without the ref, srcObject gets assigned to null and the video stays black.
-    pc.ontrack = ({ streams: [rs] }) => {
-      remoteStreamRef.current = rs;           // store it — ref callback will pick this up
-      if (remoteRef.current) {
-        remoteRef.current.srcObject = rs;
-        remoteRef.current.play().catch(() => {});
-      }
-      setRemoteConnected(true);
-    };
-
-    // Send our ICE candidates to the other peer through the server relay
-    pc.onicecandidate = ({ candidate }) => {
-      if (candidate) socket.emit("webrtc:ice", { roomId, candidate });
-    };
-
-    pc.onconnectionstatechange = () => {
-      if (pc.connectionState === "connected")                              setRemoteConnected(true);
-      if (pc.connectionState === "disconnected" || pc.connectionState === "failed") setRemoteConnected(false);
-    };
-
-    // Socket listeners for signaling exchange
-    async function onOffer({ sdp }) {
-      await pc.setRemoteDescription(new RTCSessionDescription(sdp));
-      for (const c of pendingICE.current) await pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {});
-      pendingICE.current = [];
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      socket.emit("webrtc:answer", { roomId, sdp: answer });
-    }
-
-    async function onAnswer({ sdp }) {
-      await pc.setRemoteDescription(new RTCSessionDescription(sdp));
-      for (const c of pendingICE.current) await pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {});
-      pendingICE.current = [];
-    }
-
-    async function onIce({ candidate }) {
-      if (!pc.remoteDescription) { pendingICE.current.push(candidate); return; }
-      await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => {});
-    }
-
-    socket.on("webrtc:offer",  onOffer);
-    socket.on("webrtc:answer", onAnswer);
-    socket.on("webrtc:ice",    onIce);
-
-    // Offerer creates and sends the offer right away
-    if (role === "offer") {
-      pc.createOffer()
-        .then(o => pc.setLocalDescription(o))
-        .then(() => socket.emit("webrtc:offer", { roomId, sdp: pc.localDescription }))
-        .catch(e => console.error("createOffer failed:", e));
-    }
-
-    return () => {
-      socket.off("webrtc:offer",  onOffer);
-      socket.off("webrtc:answer", onAnswer);
-      socket.off("webrtc:ice",    onIce);
-    };
+    const peer = createPeer({
+      socket, roomId, role,
+      stream: streamRef.current,
+      iceServers: ICE,
+      onRemoteStream: (rs) => {
+        remoteStreamRef.current = rs;   // the <video> mounts later; its ref callback picks this up
+        if (remoteRef.current) {
+          remoteRef.current.srcObject = rs;
+          remoteRef.current.play().catch(() => {});
+        }
+        setRemoteConnected(true);
+      },
+      onState: (st) => {
+        setCallState(st);
+        if (st.phase === "failed") setRemoteConnected(false);
+      },
+    });
+    peerRef.current = peer;
+    return () => { if (peerRef.current === peer) closePeer(); };
   }
 
   function closePeer() {
-    if (pcRef.current) { pcRef.current.close(); pcRef.current = null; }
+    if (peerRef.current) { peerRef.current.close(); peerRef.current = null; }
     setRemoteConnected(false);
-    pendingICE.current = [];
+    setCallState({ phase: "idle", detail: "" });
     remoteStreamRef.current = null;
     if (remoteRef.current) remoteRef.current.srcObject = null;
   }
@@ -549,7 +496,7 @@ function useWebRTC() {
 
   return {
     localRef, remoteRef, remoteStreamRef,
-    stream, remoteConnected,
+    stream, remoteConnected, callState,
     camErr, muted, camOff,
     startCamera, stopCamera, toggleMute, toggleCam,
     setupPeerConnection, closePeer,
@@ -984,9 +931,7 @@ export default function StrangerPlay() {
       setPage("play");
       // Start WebRTC peer connection now that we have roomId + role
       if (peerCleanupRef.current) peerCleanupRef.current();
-      setTimeout(() => {
-        peerCleanupRef.current = webrtc.setupPeerConnection(info.roomId, info.role);
-      }, 150);
+      peerCleanupRef.current = webrtc.setupPeerConnection(info.roomId, info.role);
     });
 
     socket.on("opponent:left", () => {
@@ -1058,13 +1003,19 @@ export default function StrangerPlay() {
     }
   };
 
-  const startSearch = () => {
+  const startSearch = async () => {
     if (!localStorage.getItem("tz_token")) {
       setQueueErr("Log in to play.");
       return;
     }
     if (!socket.connected) {
       setQueueErr("Not connected to the server yet. Try again in a few seconds.");
+      return;
+    }
+    // The call needs camera + mic. Get them BEFORE queueing — a match with no
+    // local tracks produces a call that can never show video.
+    if (!(await webrtc.startCamera())) {
+      setQueueErr("Camera and microphone are required to play. Allow access, then try again.");
       return;
     }
     setQueueErr("");
@@ -1601,8 +1552,15 @@ export default function StrangerPlay() {
                         <div style={{ textAlign: "center" }}>
                           <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: DS.signal, letterSpacing: 3, textTransform: "uppercase", marginBottom: 6 }}>CONNECTING</div>
                           <div style={{ fontSize: 11, color: DS.ghost, lineHeight: 1.6 }}>
-                            {matchInfo.opponent?.username || "stranger"} · up to 10s on different networks
+                            {matchInfo.opponent?.username || "stranger"} · up to 25s on different networks
                           </div>
+                          {webrtc.callState.detail && (
+                            <div style={{ marginTop: 8, fontSize: 11, lineHeight: 1.5, maxWidth: 280, fontFamily: "'JetBrains Mono', monospace",
+                              color: webrtc.callState.phase === "failed" ? DS.live : DS.ash }}>
+                              {webrtc.callState.detail}
+                              {webrtc.callState.phase === "failed" && <div style={{ marginTop: 4, color: DS.ghost }}>tap NEXT to try someone else</div>}
+                            </div>
+                          )}
                         </div>
                       </>
                     ) : (
@@ -1627,6 +1585,9 @@ export default function StrangerPlay() {
                     </span>
                     {webrtc.remoteConnected && (
                       <span style={{ width: 5, height: 5, borderRadius: "50%", background: DS.ice, flexShrink: 0 }} />
+                    )}
+                    {webrtc.callState.phase === "connected" && webrtc.callState.route && webrtc.callState.route !== "unknown" && (
+                      <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, color: DS.ghost }}>{webrtc.callState.route}</span>
                     )}
                   </div>
                 </div>

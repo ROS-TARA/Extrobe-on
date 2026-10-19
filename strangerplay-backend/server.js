@@ -799,32 +799,59 @@ io.on("connection", (socket) => {
        Both send ICE candidates → server → other side
   */
 
-  // Offerer sends SDP offer to answerer
-  socket.on("webrtc:offer", ({ roomId, sdp }) => {
+  /*
+    Signaling rules (enforced here, not trusted from the client):
+      - only the two players in a room may signal in it
+      - only the offerer may send "webrtc:offer", only the answerer "webrtc:answer"
+      - READY GATE: each side emits "webrtc:ready" once its listeners are
+        attached. When BOTH are ready the server tells the offerer to start
+        with "webrtc:start". This stops the offer being sent before the other
+        browser is listening (which silently lost the call before).
+  */
+  const roomFor = (roomId) => {
+    if (typeof roomId !== "string") return null;
     const room = rooms.get(roomId);
+    if (!room) return null;
+    if (room.offerer.socketId !== socket.id && room.answerer.socketId !== socket.id) return null;
+    return room;
+  };
+  const otherSide = (room) =>
+    room.offerer.socketId === socket.id ? room.answerer.socketId : room.offerer.socketId;
+  const validSdp = (sdp) => sdp && typeof sdp === "object" && typeof sdp.sdp === "string" && sdp.sdp.length < 100000;
+
+  socket.on("webrtc:ready", ({ roomId } = {}) => {
+    const room = roomFor(roomId);
     if (!room) return;
-    const targetId = room.answerer.socketId;
-    io.to(targetId).emit("webrtc:offer", { sdp, fromId: socket.id });
-    console.log(`📡 offer relayed → ${targetId}`);
+    room.ready = room.ready || new Set();
+    room.ready.add(socket.id);
+    if (room.ready.size === 2 && !room.started) {
+      room.started = true;
+      io.to(room.offerer.socketId).emit("webrtc:start", { roomId });
+      console.log(`🟢 both ready → offerer told to start | room: ${roomId}`);
+    }
+  });
+
+  // Offerer sends SDP offer to answerer (also used for ICE restarts)
+  socket.on("webrtc:offer", ({ roomId, sdp } = {}) => {
+    const room = roomFor(roomId);
+    if (!room || room.offerer.socketId !== socket.id || !validSdp(sdp)) return;
+    io.to(room.answerer.socketId).emit("webrtc:offer", { sdp, fromId: socket.id });
+    console.log(`📡 offer relayed → ${room.answerer.socketId}`);
   });
 
   // Answerer sends SDP answer back to offerer
-  socket.on("webrtc:answer", ({ roomId, sdp }) => {
-    const room = rooms.get(roomId);
-    if (!room) return;
-    const targetId = room.offerer.socketId;
-    io.to(targetId).emit("webrtc:answer", { sdp });
-    console.log(`📡 answer relayed → ${targetId}`);
+  socket.on("webrtc:answer", ({ roomId, sdp } = {}) => {
+    const room = roomFor(roomId);
+    if (!room || room.answerer.socketId !== socket.id || !validSdp(sdp)) return;
+    io.to(room.offerer.socketId).emit("webrtc:answer", { sdp });
+    console.log(`📡 answer relayed → ${room.offerer.socketId}`);
   });
 
   // ICE candidates flow both ways — relay to the other person in the room
-  socket.on("webrtc:ice", ({ roomId, candidate }) => {
-    const room = rooms.get(roomId);
-    if (!room) return;
-    const targetId = room.offerer.socketId === socket.id
-      ? room.answerer.socketId
-      : room.offerer.socketId;
-    io.to(targetId).emit("webrtc:ice", { candidate });
+  socket.on("webrtc:ice", ({ roomId, candidate } = {}) => {
+    const room = roomFor(roomId);
+    if (!room || !candidate || typeof candidate !== "object") return;
+    io.to(otherSide(room)).emit("webrtc:ice", { candidate });
   });
 
   /* ─── IN-MATCH EVENTS ───────────────────────────────────────*/
