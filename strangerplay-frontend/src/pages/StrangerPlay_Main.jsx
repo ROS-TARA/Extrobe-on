@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { socket, reconnectSocket } from "../socket";
 import { createPeer, parseIceServers, DEFAULT_ICE } from "../peer";
 import Profile from "./Profile";
@@ -394,12 +394,17 @@ function useWebRTC() {
   const streamRef        = useRef(null);  // ref copy of stream so closures always see it
 
   const [stream,          setStream]          = useState(null);
-  const [remoteConnected, setRemoteConnected] = useState(false);
+  const [haveRemote,      setHaveRemote]      = useState(false);   // remote stream announced (NOT proof video flows)
+  const [remoteBlocked,   setRemoteBlocked]   = useState(false);   // browser refused to autoplay remote sound
   const [camErr,  setCamErr]  = useState(null);
   const [muted,   setMuted]   = useState(false);
   const [camOff,  setCamOff]  = useState(false);
   // { phase: "idle"|"signaling"|"connecting"|"connected"|"failed", detail, route }
   const [callState, setCallState] = useState({ phase: "idle", detail: "" });
+  // The stranger's video is only shown once the network path is really up.
+  // (The remote stream is announced during offer/answer, long before any
+  //  video can flow — showing it then gives a black box and hides the status.)
+  const remoteConnected = haveRemote && callState.phase === "connected";
 
   /*
     ICE servers. Override without code changes by setting VITE_ICE_SERVERS on
@@ -410,7 +415,31 @@ function useWebRTC() {
     NOTE: anything in a VITE_ variable is visible to every visitor. Fine for
     testing; for production, TURN credentials should be issued by the backend.
   */
-  const ICE = parseIceServers(import.meta.env.VITE_ICE_SERVERS) || DEFAULT_ICE;
+  const FALLBACK_ICE = parseIceServers(import.meta.env.VITE_ICE_SERVERS) || DEFAULT_ICE;
+  const iceRef = useRef({ servers: null, turn: false, at: 0 });
+
+  // Ask the backend for ICE servers (STUN + short-lived TURN credentials).
+  // Never blocks play for long: 4 s timeout, then falls back to FALLBACK_ICE.
+  async function loadIceServers() {
+    if (iceRef.current.servers && Date.now() - iceRef.current.at < 20 * 60 * 1000) return;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 4000);
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_URL || "https://extrobe-on.onrender.com"}/api/ice`, {
+        headers: { Authorization: `Bearer ${localStorage.getItem("tz_token")}` },
+        signal: ctrl.signal,
+      });
+      if (!res.ok) throw new Error("status " + res.status);
+      const d = await res.json();
+      if (Array.isArray(d.iceServers) && d.iceServers.length) {
+        iceRef.current = { servers: d.iceServers, turn: !!d.turn, at: Date.now() };
+      }
+    } catch (e) {
+      console.warn("Couldn't load ICE servers from backend, using fallback:", e.message);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 
   // Resolves true once a live camera+mic stream exists (reuses an existing one).
   async function startCamera() {
@@ -463,19 +492,13 @@ function useWebRTC() {
     const peer = createPeer({
       socket, roomId, role,
       stream: streamRef.current,
-      iceServers: ICE,
+      iceServers: iceRef.current.servers || FALLBACK_ICE,
+      hasTurn: iceRef.current.turn,
       onRemoteStream: (rs) => {
-        remoteStreamRef.current = rs;   // the <video> mounts later; its ref callback picks this up
-        if (remoteRef.current) {
-          remoteRef.current.srcObject = rs;
-          remoteRef.current.play().catch(() => {});
-        }
-        setRemoteConnected(true);
+        remoteStreamRef.current = rs;   // the <video> mounts later; attachRemote picks this up
+        setHaveRemote(true);
       },
-      onState: (st) => {
-        setCallState(st);
-        if (st.phase === "failed") setRemoteConnected(false);
-      },
+      onState: (st) => setCallState(st),
     });
     peerRef.current = peer;
     return () => { if (peerRef.current === peer) closePeer(); };
@@ -483,10 +506,35 @@ function useWebRTC() {
 
   function closePeer() {
     if (peerRef.current) { peerRef.current.close(); peerRef.current = null; }
-    setRemoteConnected(false);
+    setHaveRemote(false);
+    setRemoteBlocked(false);
     setCallState({ phase: "idle", detail: "" });
     remoteStreamRef.current = null;
     if (remoteRef.current) remoteRef.current.srcObject = null;
+  }
+
+  // Stable ref callback for the stranger's <video>. (An inline arrow would be
+  // re-run on every render and keep resetting srcObject, which can blank the video.)
+  const attachRemote = useCallback((el) => {
+    remoteRef.current = el;
+    const rs = remoteStreamRef.current;
+    if (!el || !rs) return;
+    if (el.srcObject !== rs) el.srcObject = rs;
+    el.play().then(() => setRemoteBlocked(false)).catch(() => {
+      // Some browsers (notably iOS Safari) refuse autoplay with sound.
+      // Play muted so video shows, and offer a tap-to-hear button.
+      el.muted = true;
+      el.play().catch(() => {});
+      setRemoteBlocked(true);
+    });
+  }, []);
+
+  function unmuteRemote() {
+    const el = remoteRef.current;
+    if (!el) return;
+    el.muted = false;
+    el.play().catch(() => {});
+    setRemoteBlocked(false);
   }
 
   useEffect(() => {
@@ -494,10 +542,10 @@ function useWebRTC() {
   }, [stream]);
 
   return {
-    localRef, remoteRef, remoteStreamRef,
+    localRef, remoteRef, remoteStreamRef, attachRemote, unmuteRemote, remoteBlocked,
     stream, remoteConnected, callState,
     camErr, muted, camOff,
-    startCamera, stopCamera, toggleMute, toggleCam,
+    startCamera, stopCamera, toggleMute, toggleCam, loadIceServers,
     setupPeerConnection, closePeer,
   };
 }
@@ -1017,6 +1065,7 @@ export default function StrangerPlay() {
       setQueueErr("Camera and microphone are required to play. Allow access, then try again.");
       return;
     }
+    await webrtc.loadIceServers();   // relay credentials ready before a match can happen
     setQueueErr("");
     setMatchPhase("searching");
     setQueueTime(0);
@@ -1525,13 +1574,7 @@ export default function StrangerPlay() {
                     which was stored in ontrack even though the element wasn't ready yet.
                   */
                   <video
-                    ref={el => {
-                      webrtc.remoteRef.current = el;
-                      if (el && webrtc.remoteStreamRef.current) {
-                        el.srcObject = webrtc.remoteStreamRef.current;
-                        el.play().catch(() => {});
-                      }
-                    }}
+                    ref={webrtc.attachRemote}
                     autoPlay playsInline
                     style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
                   />
@@ -1566,6 +1609,14 @@ export default function StrangerPlay() {
                       </>
                     )}
                   </div>
+                )}
+
+                {webrtc.remoteConnected && webrtc.remoteBlocked && (
+                  <button onClick={webrtc.unmuteRemote} style={{
+                    position: "absolute", bottom: 14, left: "50%", transform: "translateX(-50%)", zIndex: 6,
+                    background: DS.signal, color: DS.void, border: "none", borderRadius: 20,
+                    padding: "8px 16px", fontSize: 12, fontWeight: 700, cursor: "pointer",
+                  }}>🔇 Tap to hear them</button>
                 )}
 
                 {/* Stranger credential — top left */}
