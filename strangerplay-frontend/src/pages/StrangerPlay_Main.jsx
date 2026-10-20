@@ -3,7 +3,6 @@ import { socket, reconnectSocket } from "../socket";
 import { createPeer, parseIceServers, DEFAULT_ICE } from "../peer";
 import Profile from "./Profile";
 import LoginSignup from "./LoginSignup";
-import GameSection from "./GameSection";
 import Rewards from "./Rewards";
 import Settings from "./Settings";
 import GameScreen from "./GameScreen";
@@ -1315,9 +1314,6 @@ export default function StrangerPlay() {
                   📡 Set up stream →
                 </button>
               )}
-              <button className="sp-btn-ghost" style={{ padding: "14px 24px", fontSize: 14 }} onClick={() => goTo("games")}>
-                Browse games
-              </button>
             </div>
 
             {/* Stats row */}
@@ -1870,7 +1866,6 @@ export default function StrangerPlay() {
 
       {page === "rewards"  && <Rewards  onNavigate={goTo} />}
       {page === "settings" && <Settings onNavigate={goTo} user={user} onUserUpdate={handleLogin} theme={theme} onToggleTheme={toggleTheme} />}
-      {page === "games"    && <GameSection onBack={() => goTo("home")} myPoints={points} />}
 
       {/* GameScreen — only renders on real match */}
       {page === "gamescreen" && matchPhase === "connected" && matchInfo ? (
