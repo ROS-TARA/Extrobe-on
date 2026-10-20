@@ -389,7 +389,7 @@ function LBRow({ rank, name, flag, pts, wins, isMe, delay }) {
    incoming video data, or the <video> element). Contains no IP addresses
    and no TURN credentials, so it is safe to screenshot/copy and share.
 ────────────────────────────────────────── */
-const BUILD_TAG = "diag-1";
+const BUILD_TAG = "diag-2";
 const DEBUG_ON = typeof window !== "undefined" && new URLSearchParams(window.location.search).has("debug");
 
 function DebugPanel({ getDiag }) {
@@ -429,6 +429,9 @@ function useWebRTC() {
   const remoteRef        = useRef(null);  // stranger's video element
   const remoteStreamRef  = useRef(null);  // holds the remote MediaStream — survives conditional rendering
   const peerRef          = useRef(null);  // active call from peer.js
+  const roomIdRef        = useRef(null);  // room of the active call
+  const diagRef          = useRef(null);  // always points at the latest getDiagnostics
+  const reportTimers     = useRef([]);    // pending call-report timers
   const streamRef        = useRef(null);  // ref copy of stream so closures always see it
 
   const [stream,          setStream]          = useState(null);
@@ -536,13 +539,29 @@ function useWebRTC() {
         remoteStreamRef.current = rs;   // the <video> mounts later; attachRemote picks this up
         setHaveRemote(true);
       },
-      onState: (st) => setCallState(st),
+      onState: (st) => {
+        setCallState(st);
+        if (st.phase === "failed") sendReport("failed");
+      },
     });
     peerRef.current = peer;
+    roomIdRef.current = roomId;
+    // Send call reports to the server log at +8 s, +20 s and +40 s (see server "call:report").
+    reportTimers.current = [8000, 20000, 40000].map(ms => setTimeout(() => sendReport(`t+${ms / 1000}s`), ms));
     return () => { if (peerRef.current === peer) closePeer(); };
   }
 
+  async function sendReport(tag) {
+    try {
+      if (!peerRef.current || !roomIdRef.current || !diagRef.current) return;
+      const report = await diagRef.current();
+      socket.emit("call:report", { roomId: roomIdRef.current, tag, build: BUILD_TAG, report });
+    } catch (e) { /* diagnostics must never break a call */ }
+  }
+
   function closePeer() {
+    reportTimers.current.forEach(clearTimeout);
+    reportTimers.current = [];
     if (peerRef.current) { peerRef.current.close(); peerRef.current = null; }
     setHaveRemote(false);
     setRemoteBlocked(false);
@@ -565,6 +584,8 @@ function useWebRTC() {
       network: peerRef.current ? await peerRef.current.getReport() : "no active peer",
     };
   }
+
+  diagRef.current = getDiagnostics;
 
   // Stable ref callback for the stranger's <video>. (An inline arrow would be
   // re-run on every render and keep resetting srcObject, which can blank the video.)

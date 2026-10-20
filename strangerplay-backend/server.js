@@ -511,6 +511,68 @@ app.patch("/api/user/settings", auth, async (req, res) => {
 /* ─────────────────────────────────────────────
    REST — LEADERBOARD
 ───────────────────────────────────────────── */
+/* ─────────────────────────────────────────────
+   ICE SERVERS — STUN + (optional) TURN relay for video calls
+   Logged-in users only. TURN credentials are short-lived and are issued by
+   Cloudflare using secrets that live ONLY in Render env vars:
+     CF_TURN_KEY_ID      (Cloudflare dashboard → Realtime → TURN → your key)
+     CF_TURN_API_TOKEN   (that key's API token)
+   If those are not set, this returns plain STUN and the app still works
+   for users whose networks allow direct connections.
+   One set of credentials is cached and shared for ICE_CACHE_MS so a busy
+   site can't burn through the Cloudflare API; each set expires on its own.
+───────────────────────────────────────────── */
+const STUN_ONLY = [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }];
+const ICE_TTL_SECONDS = 4 * 60 * 60;       // credential lifetime
+const ICE_CACHE_MS    = 30 * 60 * 1000;    // reuse for 30 min (well inside the TTL)
+let iceCache = { servers: null, at: 0 };
+
+async function fetchCloudflareIce() {
+  const base = process.env.CF_TURN_API_BASE || "https://rtc.live.cloudflare.com";
+  const r = await fetch(
+    `${base}/v1/turn/keys/${encodeURIComponent(process.env.CF_TURN_KEY_ID)}/credentials/generate-ice-servers`,
+    {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${process.env.CF_TURN_API_TOKEN}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ ttl: ICE_TTL_SECONDS }),
+      signal: AbortSignal.timeout(5000),
+    }
+  );
+  if (!r.ok) throw new Error(`Cloudflare TURN API returned ${r.status}`);
+  const data = await r.json();
+  const list = Array.isArray(data.iceServers) ? data.iceServers : data.iceServers ? [data.iceServers] : [];
+  if (!list.length) throw new Error("Cloudflare TURN API returned no iceServers");
+  return list;
+}
+
+// Any TURN provider that gives a fixed username/password (Metered, ExpressTURN, your own coturn...).
+// Render env vars:  TURN_URLS (comma separated), TURN_USERNAME, TURN_CREDENTIAL
+function staticTurnServers() {
+  const { TURN_URLS, TURN_USERNAME, TURN_CREDENTIAL } = process.env;
+  if (!TURN_URLS || !TURN_USERNAME || !TURN_CREDENTIAL) return null;
+  const urls = TURN_URLS.split(",").map(u => u.trim()).filter(u => /^turns?:/i.test(u));
+  if (!urls.length) return null;
+  return [...STUN_ONLY, { urls, username: TURN_USERNAME, credential: TURN_CREDENTIAL }];
+}
+
+app.get("/api/ice", auth, async (req, res) => {
+  res.set("Cache-Control", "no-store");
+  if (!process.env.CF_TURN_KEY_ID || !process.env.CF_TURN_API_TOKEN) {
+    const fixed = staticTurnServers();
+    if (fixed) return res.json({ iceServers: fixed, turn: true });
+    return res.json({ iceServers: STUN_ONLY, turn: false });
+  }
+  try {
+    if (!iceCache.servers || Date.now() - iceCache.at > ICE_CACHE_MS) {
+      iceCache = { servers: await fetchCloudflareIce(), at: Date.now() };
+    }
+    res.json({ iceServers: iceCache.servers, turn: true });
+  } catch (e) {
+    console.error("⚠️  TURN credential fetch failed:", e.message);   // never log the token
+    res.json({ iceServers: iceCache.servers || STUN_ONLY, turn: !!iceCache.servers });
+  }
+});
+
 app.get("/api/leaderboard", async (req, res) => {
   try {
     const top = await User.find().sort({ points: -1 }).limit(50).lean();
@@ -852,6 +914,26 @@ io.on("connection", (socket) => {
     const room = roomFor(roomId);
     if (!room || !candidate || typeof candidate !== "object") return;
     io.to(otherSide(room)).emit("webrtc:ice", { candidate });
+  });
+
+  /*
+    Call reports: each browser sends a snapshot of how its WebRTC call is going
+    (connection states, candidate TYPES, bytes/frames received — no IP addresses,
+    no credentials) so a failed call can be diagnosed from the Render log alone.
+    Only the two players in a room can report, max one report per 2 s, 8 KB cap.
+  */
+  socket.on("call:report", ({ roomId, tag, build, report } = {}) => {
+    const room = roomFor(roomId);
+    if (!room) return;
+    const now = Date.now();
+    if (socket._lastReport && now - socket._lastReport < 2000) return;
+    socket._lastReport = now;
+    let text;
+    try { text = JSON.stringify(report); } catch { return; }
+    if (!text) return;
+    if (text.length > 8000) text = text.slice(0, 8000) + "…(truncated)";
+    const side = room.offerer.socketId === socket.id ? "offerer" : "answerer";
+    console.log(`📊 call report | ${roomId} | ${side} | ${String(tag).slice(0, 20)} | build=${String(build).slice(0, 20)} | ${text}`);
   });
 
   /* ─── IN-MATCH EVENTS ───────────────────────────────────────*/
