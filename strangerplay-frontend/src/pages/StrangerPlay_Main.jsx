@@ -384,6 +384,44 @@ function LBRow({ rank, name, flag, pts, wins, isMe, delay }) {
 }
 
 /* ──────────────────────────────────────────
+   CALL DEBUG PANEL — only shown when the site is opened with ?debug=1
+   Shows exactly which layer of a call fails (signaling, network path,
+   incoming video data, or the <video> element). Contains no IP addresses
+   and no TURN credentials, so it is safe to screenshot/copy and share.
+────────────────────────────────────────── */
+const BUILD_TAG = "diag-1";
+const DEBUG_ON = typeof window !== "undefined" && new URLSearchParams(window.location.search).has("debug");
+
+function DebugPanel({ getDiag }) {
+  const [text, setText] = useState("collecting…");
+  const [open, setOpen] = useState(true);
+  const getRef = useRef(getDiag);
+  getRef.current = getDiag;
+  useEffect(() => {
+    let alive = true;
+    const tick = async () => {
+      try {
+        const d = await getRef.current();
+        if (alive) setText(JSON.stringify(d, null, 1));
+      } catch (e) { if (alive) setText("diag error: " + e.message); }
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+  return (
+    <div style={{ position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 99999, background: "rgba(0,0,0,0.88)", color: "#9f9", fontFamily: "monospace", fontSize: 9, lineHeight: 1.25 }}>
+      <div style={{ display: "flex", gap: 8, padding: "4px 8px", background: "#222" }}>
+        <b style={{ color: "#fff" }}>CALL DEBUG {BUILD_TAG}</b>
+        <button onClick={() => setOpen(o => !o)} style={{ fontSize: 10 }}>{open ? "hide" : "show"}</button>
+        <button onClick={() => navigator.clipboard && navigator.clipboard.writeText(text)} style={{ fontSize: 10 }}>copy</button>
+      </div>
+      {open && <pre style={{ margin: 0, padding: 8, maxHeight: "45vh", overflow: "auto", whiteSpace: "pre-wrap" }}>{text}</pre>}
+    </div>
+  );
+}
+
+/* ──────────────────────────────────────────
    WEBRTC HOOK — unchanged logic, cleaner
 ────────────────────────────────────────── */
 function useWebRTC() {
@@ -513,6 +551,21 @@ function useWebRTC() {
     if (remoteRef.current) remoteRef.current.srcObject = null;
   }
 
+  // Snapshot for the ?debug=1 panel: network layer (from peer.js) + the <video> element.
+  async function getDiagnostics() {
+    const el = remoteRef.current;
+    const trackInfo = (ms) => ms ? ms.getTracks().map(t => ({ kind: t.kind, readyState: t.readyState, muted: t.muted, enabled: t.enabled })) : null;
+    return {
+      build: BUILD_TAG,
+      ui: { callPhase: callState.phase, callDetail: callState.detail, route: callState.route || null, haveRemote, remoteConnected, remoteBlocked },
+      ice: { turnConfigured: iceRef.current.turn, source: iceRef.current.servers ? "backend /api/ice" : "fallback",
+             urls: (iceRef.current.servers || FALLBACK_ICE).flatMap(x => [].concat(x.urls)).map(u => String(u).split("?")[0]) },
+      localStream: trackInfo(streamRef.current),
+      remoteVideoElement: el ? { readyState: el.readyState, paused: el.paused, muted: el.muted, videoWidth: el.videoWidth, videoHeight: el.videoHeight, hasSrcObject: !!el.srcObject, srcTracks: trackInfo(el.srcObject) } : "not mounted",
+      network: peerRef.current ? await peerRef.current.getReport() : "no active peer",
+    };
+  }
+
   // Stable ref callback for the stranger's <video>. (An inline arrow would be
   // re-run on every render and keep resetting srcObject, which can blank the video.)
   const attachRemote = useCallback((el) => {
@@ -542,7 +595,7 @@ function useWebRTC() {
   }, [stream]);
 
   return {
-    localRef, remoteRef, remoteStreamRef, attachRemote, unmuteRemote, remoteBlocked,
+    localRef, remoteRef, remoteStreamRef, attachRemote, unmuteRemote, remoteBlocked, getDiagnostics,
     stream, remoteConnected, callState,
     camErr, muted, camOff,
     startCamera, stopCamera, toggleMute, toggleCam, loadIceServers,
@@ -1088,9 +1141,16 @@ export default function StrangerPlay() {
 
   const [menuOpen, setMenuOpen] = useState(false);
 
+  const getDiag = async () => ({
+    app: { page, matchPhase, socketConnected: socket.connected, loggedIn: !!localStorage.getItem("tz_token"), queueErr: queueErr || null,
+           room: matchInfo ? { role: matchInfo.role, opponentLeft } : null },
+    ...(await webrtc.getDiagnostics()),
+  });
+
   return (
     <div style={{ minHeight: "100vh", background: DS.void, color: DS.plat, fontFamily: "'Inter', sans-serif", overflowX: "hidden" }}>
       <style>{GLOBAL_CSS}</style>
+      {DEBUG_ON && <DebugPanel getDiag={getDiag} />}
       <ScanLine />
       <AmbientGrid />
 
