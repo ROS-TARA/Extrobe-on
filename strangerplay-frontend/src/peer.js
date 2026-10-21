@@ -222,6 +222,14 @@ export function createPeer({
     if (st === "failed") tryRestart();
   };
 
+  // Why relay candidates are missing: 401 = login rejected, 701 = server unreachable, etc.
+  const iceErrors = [];
+  pc.onicecandidateerror = (e) => {
+    const line = `ICE server error code=${e.errorCode} text="${String(e.errorText || "").slice(0, 60)}" url=${String(e.url || "").split("?")[0]}`;
+    note(line);
+    if (iceErrors.length < 12) iceErrors.push(line);
+  };
+
   pc.onsignalingstatechange = () => note(`signalingState=${pc.signalingState}`);
   pc.onconnectionstatechange = () => note(`connectionState=${pc.connectionState}`);
   pc.onicegatheringstatechange = () => note(`iceGatheringState=${pc.iceGatheringState}`);
@@ -250,6 +258,7 @@ export function createPeer({
       iceConnectionState: pc.iceConnectionState,
       connectionState: pc.connectionState,
       iceGatheringState: pc.iceGatheringState,
+      iceServerErrors: iceErrors.slice(),
       localCandidates: { ...localCands },
       remoteCandidates: { ...remoteCands },
       selectedPair: null,
