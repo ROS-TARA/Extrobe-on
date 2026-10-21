@@ -555,8 +555,15 @@ function staticTurnServers() {
   return [...STUN_ONLY, { urls, username: TURN_USERNAME, credential: TURN_CREDENTIAL }];
 }
 
+function iceSource() {
+  if (process.env.CF_TURN_KEY_ID && process.env.CF_TURN_API_TOKEN) return "cloudflare";
+  if (staticTurnServers()) return "static TURN_* vars";
+  return "none (STUN only)";
+}
+
 app.get("/api/ice", auth, async (req, res) => {
   res.set("Cache-Control", "no-store");
+  console.log(`🧊 ICE servers requested | relay source: ${iceSource()}`);
   if (!process.env.CF_TURN_KEY_ID || !process.env.CF_TURN_API_TOKEN) {
     const fixed = staticTurnServers();
     if (fixed) return res.json({ iceServers: fixed, turn: true });
@@ -1029,4 +1036,5 @@ io.on("connection", (socket) => {
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
   console.log(`🚀 Tranzle server running on port ${PORT}`);
+  console.log(`🧊 TURN relay: ${iceSource()}` + (process.env.TURN_URLS ? ` | TURN_URLS has ${process.env.TURN_URLS.split(",").filter(u => /^turns?:/i.test(u.trim())).length} valid address(es) of ${process.env.TURN_URLS.split(",").length}` : ""));
 });
