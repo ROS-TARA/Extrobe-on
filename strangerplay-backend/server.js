@@ -668,7 +668,7 @@ app.patch("/api/user/settings", auth, async (req, res) => {
       update.email = e;
     }
 
-    const user = await User.findByIdAndUpdate(req.userId, update, { new: true });
+    const user = await User.findByIdAndUpdate(req.userId, update, { returnDocument: "after" });
     if (!user) return res.status(404).json({ error: "user not found" });
     res.json(safeUser(user));
   } catch (e) {
@@ -699,7 +699,7 @@ app.post("/api/user/avatar", auth, async (req, res) => {
     const user = await User.findByIdAndUpdate(
       req.userId,
       { avatarData: buf, avatarType: m[1], avatar: `/api/avatar/${req.userId}?v=${Date.now()}` },
-      { new: true }
+      { returnDocument: "after" }
     );
     if (!user) return res.status(404).json({ error: "user not found" });
     res.json(safeUser(user));
@@ -714,7 +714,7 @@ app.delete("/api/user/avatar", auth, async (req, res) => {
     const user = await User.findByIdAndUpdate(
       req.userId,
       { $set: { avatar: "", avatarType: "" }, $unset: { avatarData: 1 } },
-      { new: true }
+      { returnDocument: "after" }
     );
     if (!user) return res.status(404).json({ error: "user not found" });
     res.json(safeUser(user));
@@ -1097,7 +1097,7 @@ io.on("connection", (socket) => {
         const updated = await User.findOneAndUpdate(
           { _id: p.userId, coins: { $gte: cost } },
           { $inc: { coins: -cost } },
-          { new: true }
+          { returnDocument: "after" }
         );
         if (!updated) {
           await refund();                               // give back whoever was already charged
