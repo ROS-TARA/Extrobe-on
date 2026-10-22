@@ -213,6 +213,8 @@ function publicUser(u, viewerId = null) {
   if (viewerId && String(u._id) === String(viewerId)) return out;
   delete out.email;
   delete out.coins;
+  delete out.hasPassword;
+  delete out.googleLinked;
   return out;
 }
 
@@ -225,6 +227,8 @@ function safeUser(u) {
     email: u.email,
     flag: u.flag,
     avatar: u.avatar || "",
+    hasPassword: u.hasPassword !== false,
+    googleLinked: !!u.googleId,
     country: u.country,
     points: u.points,
     coins: u.coins,

@@ -92,14 +92,18 @@ export default function Profile({ username, me, token, onUserUpdate, onPlay, onL
   const [matches, setMatches] = useState(null);
   const [editing, setEditing] = useState(false);
 
+  // If the parent forgets to pass `username`, show the logged-in user's own profile.
+  const name = typeof username === "string" && username ? username : me && me.username;
+
   useEffect(() => {
+    if (!name) { setStatus("missing"); return; }
     let dead = false;
     setStatus("loading");
-    api(`/api/user/${encodeURIComponent(username)}`, { token })
+    api(`/api/user/${encodeURIComponent(name)}`, { token })
       .then((u) => { if (!dead) { setP(u); setStatus("ok"); } })
       .catch(() => { if (!dead) setStatus("missing"); });
     return () => { dead = true; };
-  }, [username, token]);
+  }, [name, token]);
 
   const pid = p && p._id;
   useEffect(() => {
