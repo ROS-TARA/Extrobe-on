@@ -35,6 +35,12 @@ const cors       = require("cors");
 const crypto     = require("crypto");
 const nodemailer = require("nodemailer");
 
+// Google sign-in: verifies the ID token Google gives the browser. No client secret needed.
+//   npm install google-auth-library      +      GOOGLE_CLIENT_ID in Render env vars
+let OAuth2Client = null;
+try { ({ OAuth2Client } = require("google-auth-library")); } catch { /* not installed yet */ }
+const googleClient = OAuth2Client && process.env.GOOGLE_CLIENT_ID ? new OAuth2Client(process.env.GOOGLE_CLIENT_ID) : null;
+
 const app    = express();
 const server = http.createServer(app);
 
@@ -101,6 +107,9 @@ const UserSchema = new mongoose.Schema({
   username:    { type: String, required: true, unique: true, lowercase: true },
   email:       { type: String, required: true, unique: true, lowercase: true },
   password:    { type: String, required: true },
+  googleId:    { type: String, unique: true, sparse: true },
+  hasPassword: { type: Boolean, default: true },   // false = signed up with Google and has no password of their own
+  avatar:      { type: String, default: "" },
   flag:        { type: String, default: "🌍" },
   country:     { type: String, default: "" },
   points:      { type: Number, default: 0 },
@@ -212,6 +221,7 @@ function safeUser(u) {
     username: u.username,
     email: u.email,
     flag: u.flag,
+    avatar: u.avatar || "",
     country: u.country,
     points: u.points,
     coins: u.coins,
@@ -309,6 +319,7 @@ app.post("/api/auth/signin", async (req, res) => {
   try {
     const user = await User.findOne({ email: email.toLowerCase() });
     if (!user) return res.status(401).json({ error: "wrong email or password" });
+    if (user.hasPassword === false) return res.status(401).json({ error: "This account signs in with Google. Tap Continue with Google." });
 
     const ok = await bcrypt.compare(password, user.password);
     if (!ok)  return res.status(401).json({ error: "wrong email or password" });
@@ -318,6 +329,72 @@ app.post("/api/auth/signin", async (req, res) => {
   } catch (e) {
     console.error("signin error:", e);
     res.status(500).json({ error: "server error" });
+  }
+});
+
+// Pick a free username like "sam" / "sam4821" from the Google name
+async function uniqueUsername(base) {
+  let clean = String(base || "").toLowerCase().replace(/[^a-z0-9_]/g, "").slice(0, 15);
+  if (clean.length < 3) clean = "player" + clean;
+  for (let i = 0; i < 8; i++) {
+    const candidate = i === 0 ? clean : clean + Math.floor(1000 + Math.random() * 9000);
+    if (!(await User.exists({ username: candidate }))) return candidate;
+  }
+  return clean + crypto.randomBytes(3).toString("hex");
+}
+
+// POST /api/auth/google — "Continue with Google"
+// The browser sends the ID token Google signed. We verify it (signature, expiry, and that it
+// was issued for OUR client id), then log in, link, or create the account.
+app.post("/api/auth/google", async (req, res) => {
+  if (!googleClient) return res.status(503).json({ error: "Google sign-in isn't set up yet." });
+  const { credential } = req.body || {};
+  if (!credential || typeof credential !== "string") return res.status(400).json({ error: "missing Google credential" });
+
+  try {
+    const ticket = await googleClient.verifyIdToken({ idToken: credential, audience: process.env.GOOGLE_CLIENT_ID });
+    const p = ticket.getPayload();
+    if (!p || !p.sub || !p.email || p.email_verified !== true) {
+      return res.status(401).json({ error: "Your Google email isn't verified." });
+    }
+    const email = p.email.toLowerCase();
+    let isNew = false;
+
+    let user = await User.findOne({ googleId: p.sub });
+    if (!user) {
+      const byEmail = await User.findOne({ email });
+      if (byEmail) {
+        // Same email already has an account → link Google to it.
+        // Email/password signup doesn't prove the email is theirs, so someone could have registered
+        // this address earlier with a password they know. Google just proved the real owner, so
+        // we invalidate any old password. (They can set a new one with "Forgot password".)
+        byEmail.googleId = p.sub;
+        if (byEmail.hasPassword !== false) {
+          byEmail.password = await bcrypt.hash(crypto.randomBytes(32).toString("hex"), 10);
+          byEmail.hasPassword = false;
+        }
+        if (!byEmail.avatar && p.picture) byEmail.avatar = p.picture;
+        await byEmail.save();
+        user = byEmail;
+      } else {
+        const username = await uniqueUsername(p.given_name || p.name || email.split("@")[0]);
+        user = await User.create({
+          name: p.name || username,
+          username,
+          email,
+          password: await bcrypt.hash(crypto.randomBytes(32).toString("hex"), 10),
+          hasPassword: false,
+          googleId: p.sub,
+          avatar: p.picture || "",
+          points: 0, wins: 0, gamesPlayed: 0,
+        });
+        isNew = true;
+      }
+    }
+    return res.json({ token: signToken(user._id), user: safeUser(user), isNew });
+  } catch (e) {
+    console.error("google sign-in error:", e.message);
+    return res.status(401).json({ error: "Google sign-in failed. Try again." });
   }
 });
 
@@ -369,6 +446,7 @@ app.post("/api/auth/reset-password", async (req, res) => {
     if (!user) return res.status(400).json({ error: "reset link is invalid or expired" });
 
     user.password = await bcrypt.hash(password, 10);
+    user.hasPassword = true;
     user.resetTokenHash = null;
     user.resetTokenExpiry = null;
     await user.save();
@@ -394,6 +472,7 @@ app.post("/api/auth/change-password", auth, async (req, res) => {
     const user = await User.findById(req.userId);
     if (!user) return res.status(404).json({ error: "user not found" });
 
+    if (user.hasPassword === false) return res.status(400).json({ error: "This account uses Google sign-in. Use Forgot password to set a password." });
     const match = await bcrypt.compare(currentPassword, user.password);
     if (!match) return res.status(401).json({ error: "current password is wrong" });
 
