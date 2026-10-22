@@ -84,11 +84,15 @@ export function createPeer({
   // offer always contains media sections (an offer with none can never
   // deliver video to us).
   const tracks = stream ? stream.getTracks() : [];
-  if (tracks.length) {
-    tracks.forEach((t) => pc.addTrack(t, stream));
-  } else {
-    pc.addTransceiver("audio", { direction: "recvonly" });
-    pc.addTransceiver("video", { direction: "recvonly" });
+  tracks.forEach((t) => pc.addTrack(t, stream));
+  if (role === "offer") {
+    // The offer decides which media sections exist. If a kind is missing locally
+    // (e.g. mic allowed but camera denied), still ask to RECEIVE it, otherwise
+    // the call can never deliver that media to us. The answerer just answers
+    // whatever sections the offer contains.
+    for (const kind of ["audio", "video"]) {
+      if (!tracks.some((t) => t.kind === kind)) pc.addTransceiver(kind, { direction: "recvonly" });
+    }
   }
 
   pc.ontrack = (ev) => {
@@ -210,6 +214,7 @@ export function createPeer({
       clearTimeout(timeoutTimer);
       clearTimeout(disconnectTimer);
       connectedOnce = true;
+      restarts = 0;            // a healthy call earns a fresh set of retries
       emitState("connected", "Connected", await routeType());
     }
     if (st === "disconnected") {

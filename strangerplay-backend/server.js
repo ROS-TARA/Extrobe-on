@@ -81,9 +81,9 @@ const io = new Server(server, {
       cb(new Error("CORS"));
     },
     methods: ["GET","POST"],
-      pingTimeout: 60000,   // wait 60s before declaring disconnect (default: 20s)
-  pingInterval: 25000, 
   },
+  pingTimeout: 60000,    // wait 60s before declaring disconnect (default: 20s)
+  pingInterval: 25000,
 });
 
 /* ─────────────────────────────────────────────
@@ -137,6 +137,8 @@ const MatchSchema = new mongoose.Schema({
 
 const User  = mongoose.model("User",  UserSchema);
 const Match = mongoose.model("Match", MatchSchema);
+// One row per Stripe checkout session already credited — stops a retried webhook paying coins twice
+const PaidSession = mongoose.model("PaidSession", new mongoose.Schema({ _id: String, at: { type: Date, default: Date.now } }));
 
 /* ─────────────────────────────────────────────
    HELPERS
@@ -184,6 +186,22 @@ function calculateRank(points) {
   if (points >= 50)   return "Bronze III";
   if (points >= 20)   return "Bronze II";
   return "Bronze I";
+}
+
+// Who is calling? (optional login — returns the user id or null)
+function optionalViewerId(req) {
+  const h = req.headers.authorization;
+  if (!h || !h.startsWith("Bearer ")) return null;
+  try { return jwt.verify(h.slice(7), JWT_SECRET).id; } catch { return null; }
+}
+
+// What OTHER people may see: no email, no coin balance. You still see your own in full.
+function publicUser(u, viewerId = null) {
+  const out = safeUser(u);
+  if (viewerId && String(u._id) === String(viewerId)) return out;
+  delete out.email;
+  delete out.coins;
+  return out;
 }
 
 // Strip password before sending user to frontend
@@ -447,8 +465,24 @@ app.post("/api/coins/webhook", express.raw({ type: "application/json" }), async 
     return res.status(400).end();
   }
   if (event.type === "checkout.session.completed") {
-    const { userId, coins } = event.data.object.metadata;
-    await User.findByIdAndUpdate(userId, { $inc: { coins: Number(coins) } });
+    const session = event.data.object;
+    if (session.payment_status === "paid") {
+      try {
+        await PaidSession.create({ _id: session.id });          // duplicate key → already credited
+      } catch (e) {
+        if (e && e.code === 11000) return res.json({ received: true });
+        console.error("webhook marker error:", e.message);
+        return res.status(500).end();                           // Stripe will retry
+      }
+      try {
+        const { userId, coins } = session.metadata;
+        await User.findByIdAndUpdate(userId, { $inc: { coins: Number(coins) } });
+      } catch (e) {
+        console.error("webhook credit error:", e.message);
+        await PaidSession.deleteOne({ _id: session.id }).catch(() => {});   // allow the retry to credit
+        return res.status(500).end();
+      }
+    }
   }
   res.json({ received: true });
 });
@@ -462,7 +496,7 @@ app.get("/api/user/:username", async (req, res) => {
   try {
     const user = await User.findOne({ username: req.params.username.toLowerCase() });
     if (!user) return res.status(404).json({ error: "user not found" });
-    res.json(safeUser(user));
+    res.json(publicUser(user, optionalViewerId(req)));
   } catch {
     res.status(500).json({ error: "server error" });
   }
@@ -542,7 +576,10 @@ async function fetchCloudflareIce() {
   const data = await r.json();
   const list = Array.isArray(data.iceServers) ? data.iceServers : data.iceServers ? [data.iceServers] : [];
   if (!list.length) throw new Error("Cloudflare TURN API returned no iceServers");
-  return list;
+  // Port-53 TURN URLs are filtered/slow in browsers (Firefox especially) — drop them
+  return list
+    .map(sv => ({ ...sv, urls: [].concat(sv.urls).filter(u => !/:53(\?|$)/.test(u)) }))
+    .filter(sv => sv.urls.length);
 }
 
 // Any TURN provider that gives a fixed username/password (Metered, ExpressTURN, your own coturn...).
@@ -550,9 +587,10 @@ async function fetchCloudflareIce() {
 function staticTurnServers() {
   const { TURN_URLS, TURN_USERNAME, TURN_CREDENTIAL } = process.env;
   if (!TURN_URLS || !TURN_USERNAME || !TURN_CREDENTIAL) return null;
-  const urls = TURN_URLS.split(",").map(u => u.trim()).filter(u => /^turns?:/i.test(u));
+  const strip = (v) => String(v).trim().replace(/^["']|["']$/g, "");
+  const urls = TURN_URLS.split(",").map(strip).filter(u => /^turns?:/i.test(u));
   if (!urls.length) return null;
-  return [...STUN_ONLY, { urls, username: TURN_USERNAME, credential: TURN_CREDENTIAL }];
+  return [...STUN_ONLY, { urls, username: strip(TURN_USERNAME), credential: strip(TURN_CREDENTIAL) }];
 }
 
 function iceSource() {
@@ -576,14 +614,15 @@ app.get("/api/ice", auth, async (req, res) => {
     res.json({ iceServers: iceCache.servers, turn: true });
   } catch (e) {
     console.error("⚠️  TURN credential fetch failed:", e.message);   // never log the token
-    res.json({ iceServers: iceCache.servers || STUN_ONLY, turn: !!iceCache.servers });
+    const fb = iceCache.servers || staticTurnServers();
+    res.json({ iceServers: fb || STUN_ONLY, turn: !!fb });
   }
 });
 
 app.get("/api/leaderboard", async (req, res) => {
   try {
     const top = await User.find().sort({ points: -1 }).limit(50).lean();
-    res.json(top.map((u, i) => ({ ...safeUser(u), globalRank: i + 1 })));
+    res.json(top.map((u, i) => ({ ...publicUser(u), globalRank: i + 1 })));
   } catch {
     res.status(500).json({ error: "server error" });
   }
@@ -830,34 +869,52 @@ io.on("connection", (socket) => {
     echo: 1, finishmystory: 1,
   };
 
-  socket.on("proposeGame", ({ roomId, game }) => {
-    if (!rooms.has(roomId)) return;
+  socket.on("proposeGame", ({ roomId, game } = {}) => {
+    const room = roomFor(roomId);                       // only the two players
+    if (!room || typeof game !== "string" || game.length > 40) return;
+    room.proposal = { game, by: socket.id };
     io.to(roomId).emit("gameProposed", { game, proposedBy: socket.id });
   });
 
-  socket.on("acceptGame", async ({ roomId, game }) => {
-    const room = rooms.get(roomId);
+  socket.on("acceptGame", async ({ roomId, game } = {}) => {
+    const room = roomFor(roomId);
     if (!room) return;
+    // Must answer an open proposal made by the OTHER player; a proposal can be accepted once
+    const prop = room.proposal;
+    if (!prop || prop.game !== game || prop.by === socket.id || room.charging) return;
+    room.charging = true;
+    room.proposal = null;
+
     const cost = GAME_COSTS[game] || 1;
-
     const players = [room.offerer, room.answerer].filter(p => p.userId);
-    // Atomic, race-safe deduction: only succeeds if the balance is still
-    // >= cost at the moment of the update. Two simultaneous spends can't
-    // both succeed and push someone's coins negative.
-    for (const p of players) {
-      const updated = await User.findOneAndUpdate(
-        { _id: p.userId, coins: { $gte: cost } },
-        { $inc: { coins: -cost } },
-        { new: true }
-      );
-      if (!updated) {
-        io.to(roomId).emit("gameRejected", { game, reason: "not enough coins", userId: p.userId });
-        return;
+    const charged = [];
+    const refund = async () => {
+      for (const id of charged) await User.findByIdAndUpdate(id, { $inc: { coins: cost } }).catch(() => {});
+    };
+    try {
+      // Atomic, race-safe deduction: only succeeds if balance >= cost at update time
+      for (const p of players) {
+        const updated = await User.findOneAndUpdate(
+          { _id: p.userId, coins: { $gte: cost } },
+          { $inc: { coins: -cost } },
+          { new: true }
+        );
+        if (!updated) {
+          await refund();                               // give back whoever was already charged
+          io.to(roomId).emit("gameRejected", { game, reason: "not enough coins", userId: p.userId });
+          return;
+        }
+        charged.push(p.userId);
       }
+      room.gameMode = game;
+      io.to(roomId).emit("gameStarted", { game, cost });
+    } catch (e) {
+      console.error("acceptGame error:", e.message);
+      await refund();
+      io.to(roomId).emit("gameRejected", { game, reason: "server error" });
+    } finally {
+      room.charging = false;
     }
-
-    room.gameMode = game;
-    io.to(roomId).emit("gameStarted", { game, cost });
   });
 
   /* ─── WEBRTC SIGNALING ──────────────────────────────────────
@@ -946,47 +1003,46 @@ io.on("connection", (socket) => {
   /* ─── IN-MATCH EVENTS ───────────────────────────────────────*/
 
   // Crowd reaction — broadcast to everyone in the room
-  socket.on("reaction", ({ roomId, emoji }) => {
+  socket.on("reaction", ({ roomId, emoji } = {}) => {
+    if (!roomFor(roomId) || typeof emoji !== "string" || emoji.length > 16) return;
     socket.to(roomId).emit("reaction", { emoji, fromId: socket.id });
   });
 
   // Round started — both players sync
-  socket.on("round:start", ({ roomId, round, mode }) => {
+  socket.on("round:start", ({ roomId, round, mode } = {}) => {
+    if (!roomFor(roomId)) return;
     socket.to(roomId).emit("round:start", { round, mode });
   });
 
   // Round ended — relay result to opponent
-  socket.on("round:end", ({ roomId, round, result }) => {
+  socket.on("round:end", ({ roomId, round, result } = {}) => {
+    if (!roomFor(roomId)) return;
     socket.to(roomId).emit("round:end", { round, result });
   });
 
   // Match finished — save to DB and update points
-  socket.on("match:end", async ({ roomId, won, entryFee, gameMode }) => {
-    const room = rooms.get(roomId);
-    if (!room) return;
+  socket.on("match:end", async ({ roomId, won, gameMode } = {}) => {
+    const room = roomFor(roomId);                       // only the two players of this room
+    if (!room || room.ended) return;                    // and only once per room
+    room.ended = true;
+
+    const entryFee = room.entryFee;                     // decided by the server at match time — never trust the client's number
+    const mode = typeof gameMode === "string" ? gameMode.slice(0, 40) : room.gameMode;
+    const myInfo  = room.offerer.socketId === socket.id ? room.offerer  : room.answerer;
+    const oppInfo = room.offerer.socketId === socket.id ? room.answerer : room.offerer;
 
     // Only update DB if both players are authenticated
-    const myInfo    = room.offerer.socketId   === socket.id ? room.offerer   : room.answerer;
-    const oppInfo   = room.offerer.socketId   === socket.id ? room.answerer  : room.offerer;
-
-    if (myInfo.userId && oppInfo.userId) {
+    if (myInfo.userId && oppInfo.userId && Number.isFinite(entryFee)) {
       try {
-        // Winner gets entryFee * 2 points, loser loses entryFee
-        const [winInc, loseInc] = [entryFee, -entryFee];
-        if (won) {
-          await User.findByIdAndUpdate(myInfo.userId,  { $inc: { points: winInc,  wins: 1, gamesPlayed: 1 } });
-          await User.findByIdAndUpdate(oppInfo.userId, { $inc: { points: loseInc, gamesPlayed: 1 } });
-        } else {
-          await User.findByIdAndUpdate(myInfo.userId,  { $inc: { points: loseInc, gamesPlayed: 1 } });
-          await User.findByIdAndUpdate(oppInfo.userId, { $inc: { points: winInc,  wins: 1, gamesPlayed: 1 } });
-        }
-
-        // Save match record
+        const winner = won === true ? myInfo : oppInfo;
+        const loser  = won === true ? oppInfo : myInfo;
+        await User.findByIdAndUpdate(winner.userId, { $inc: { points:  entryFee, wins: 1, gamesPlayed: 1 } });
+        await User.findByIdAndUpdate(loser.userId,  { $inc: { points: -entryFee,          gamesPlayed: 1 } });
         await Match.create({
           player1: myInfo.userId,
           player2: oppInfo.userId,
-          winner: won ? myInfo.userId : oppInfo.userId,
-          gameMode,
+          winner:  winner.userId,
+          gameMode: mode,
           entryFee,
         });
       } catch (e) {
@@ -998,8 +1054,10 @@ io.on("connection", (socket) => {
   });
 
   // Player leaves mid-match — tell opponent
-  socket.on("match:leave", ({ roomId }) => {
+  socket.on("match:leave", ({ roomId } = {}) => {
+    if (!roomFor(roomId)) return;                       // can't kill someone else's room
     socket.to(roomId).emit("opponent:left");
+    socket.leave(roomId);
     rooms.delete(roomId);
   });
 
@@ -1022,7 +1080,6 @@ io.on("connection", (socket) => {
       if (room.offerer.socketId === socket.id || room.answerer.socketId === socket.id) {
         socket.to(roomId).emit("opponent:left");
         rooms.delete(roomId);
-        break;
       }
     }
 
