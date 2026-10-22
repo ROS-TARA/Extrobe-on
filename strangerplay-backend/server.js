@@ -72,7 +72,7 @@ app.use(cors({
 // parsing for that one path only; its own route below applies express.raw().
 app.use((req, res, next) => {
   if (req.path === "/api/coins/webhook") return next();
-  express.json()(req, res, next);
+  express.json({ limit: "300kb" })(req, res, next);
 });
 
 /* ─────────────────────────────────────────────
@@ -109,7 +109,9 @@ const UserSchema = new mongoose.Schema({
   password:    { type: String, required: true },
   googleId:    { type: String, unique: true, sparse: true },
   hasPassword: { type: Boolean, default: true },   // false = signed up with Google and has no password of their own
-  avatar:      { type: String, default: "" },
+  avatar:      { type: String, default: "" },          // URL the app shows (Google photo, or /api/avatar/<id>)
+  avatarData:  { type: Buffer, select: false },        // uploaded photo bytes — never loaded unless asked for
+  avatarType:  { type: String, default: "" },
   flag:        { type: String, default: "🌍" },
   country:     { type: String, default: "" },
   points:      { type: Number, default: 0 },
@@ -124,6 +126,7 @@ const UserSchema = new mongoose.Schema({
     tiktok:    { type: String, default: "" },
     youtube:   { type: String, default: "" },
     twitter:   { type: String, default: "" },
+    facebook:  { type: String, default: "" },
   },
   rank:        { type: String, default: "Bronze I" },
   globalRank:  { type: Number, default: 9999 },
@@ -581,35 +584,88 @@ app.get("/api/user/:username", async (req, res) => {
   }
 });
 
-// PATCH /api/user/settings — update bio, flag, etc.
+// GET /api/me — who am I? (lets the app reload the saved profile after a refresh)
+app.get("/api/me", auth, async (req, res) => {
+  try {
+    const user = await User.findById(req.userId);
+    if (!user) return res.status(404).json({ error: "user not found" });
+    res.json(safeUser(user));
+  } catch {
+    res.status(500).json({ error: "server error" });
+  }
+});
+
+/* Social links: people type "@sam" or paste a link. We store a clean https link, and ONLY for
+   the right site — so nobody can save a javascript: link or a look-alike domain that other
+   users would then click. */
+const SOCIAL = {
+  instagram: { hosts: ["instagram.com"],                   build: h => `https://www.instagram.com/${h}` },
+  tiktok:    { hosts: ["tiktok.com"],                      build: h => `https://www.tiktok.com/@${h}` },
+  facebook:  { hosts: ["facebook.com", "fb.com", "fb.me"], build: h => `https://www.facebook.com/${h}` },
+};
+function normalizeSocial(platform, raw) {
+  const cfg = SOCIAL[platform];
+  const v = String(raw == null ? "" : raw).trim();
+  if (!v) return "";                                   // empty = remove the link
+  if (/^https?:\/\//i.test(v) || /^(www\.|m\.)?[a-z0-9-]+\.[a-z]{2,}\//i.test(v)) {
+    let u;
+    try { u = new URL(/^https?:/i.test(v) ? v : "https://" + v); } catch { return null; }
+    const host = u.hostname.toLowerCase();
+    if (!cfg.hosts.some(h => host === h || host.endsWith("." + h))) return null;
+    u.protocol = "https:"; u.username = ""; u.password = ""; u.hash = "";
+    const out = u.toString();
+    return out.length <= 200 ? out : null;
+  }
+  const handle = v.replace(/^@/, "");
+  if (!/^[A-Za-z0-9._-]{1,50}$/.test(handle)) return null;
+  return cfg.build(handle);
+}
+
+// PATCH /api/user/settings — name, username, bio, social links (saved to the account)
 app.patch("/api/user/settings", auth, async (req, res) => {
   try {
-    const { username, email, bio, flag, country, socialLinks } = req.body;
+    const { name, username, email, bio, flag, country, socialLinks } = req.body || {};
     const update = {};
-    if (bio !== undefined) update.bio = bio;
-    if (flag)               update.flag = flag;
-    if (country)            update.country = country;
+
+    if (name !== undefined) {
+      const n = String(name).trim();
+      if (n.length < 1 || n.length > 40) return res.status(400).json({ error: "Name must be 1–40 characters." });
+      update.name = n;
+    }
+    if (bio !== undefined) {
+      const b = String(bio).trim();
+      if (b.length > 150) return res.status(400).json({ error: "Bio can be up to 150 characters." });
+      update.bio = b;
+    }
+    if (flag)    update.flag = String(flag).slice(0, 16);
+    if (country) update.country = String(country).slice(0, 60);
+
     if (socialLinks && typeof socialLinks === "object") {
-      // Merge rather than overwrite — Profile only sends what it has, and
-      // Settings might only send some fields. Build it as dot-paths so
-      // Mongo merges instead of replacing the whole sub-object with undefineds.
-      for (const key of ["instagram", "tiktok", "youtube", "twitter"]) {
-        if (socialLinks[key] !== undefined) update[`socialLinks.${key}`] = socialLinks[key];
+      for (const key of Object.keys(SOCIAL)) {
+        if (socialLinks[key] === undefined) continue;
+        const clean = normalizeSocial(key, socialLinks[key]);
+        if (clean === null) {
+          const label = key[0].toUpperCase() + key.slice(1);
+          return res.status(400).json({ error: `That ${label} link doesn't look right. Use your username or a ${label} link.` });
+        }
+        update[`socialLinks.${key}`] = clean;
       }
     }
 
-    // username/email are unique-indexed — a blind update would crash with a
-    // duplicate-key error if someone else already has that value. Check first,
-    // and exclude the current user from the collision check.
+    // username/email are unique — check first so we return a friendly error, not a crash
     if (username) {
-      const taken = await User.findOne({ username: username.toLowerCase(), _id: { $ne: req.userId } });
-      if (taken) return res.status(409).json({ error: "username already taken" });
-      update.username = username.toLowerCase();
+      const u = String(username).trim().toLowerCase();
+      if (!/^[a-z0-9_]{3,20}$/.test(u)) return res.status(400).json({ error: "Username: 3–20 letters, numbers or underscores." });
+      const taken = await User.findOne({ username: u, _id: { $ne: req.userId } });
+      if (taken) return res.status(409).json({ error: "That username is taken." });
+      update.username = u;
     }
     if (email) {
-      const taken = await User.findOne({ email: email.toLowerCase(), _id: { $ne: req.userId } });
-      if (taken) return res.status(409).json({ error: "email already taken" });
-      update.email = email.toLowerCase();
+      const e = String(email).trim().toLowerCase();
+      if (!/^\S+@\S+\.\S+$/.test(e)) return res.status(400).json({ error: "That email doesn't look right." });
+      const taken = await User.findOne({ email: e, _id: { $ne: req.userId } });
+      if (taken) return res.status(409).json({ error: "That email is already used." });
+      update.email = e;
     }
 
     const user = await User.findByIdAndUpdate(req.userId, update, { new: true });
@@ -618,6 +674,71 @@ app.patch("/api/user/settings", auth, async (req, res) => {
   } catch (e) {
     console.error("settings update error:", e);
     res.status(500).json({ error: "server error" });
+  }
+});
+
+/* Profile photo. The browser shrinks it to a small square first; the server re-checks size and
+   that the bytes really are a JPEG/PNG/WebP, then stores it on the account (Render's disk is wiped
+   on every deploy, so files on disk would vanish — the database doesn't). */
+const AVATAR_MAX_BYTES = 200 * 1024;
+function looksLikeImage(buf, mime) {
+  if (mime === "image/jpeg") return buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff;
+  if (mime === "image/png")  return buf.length > 8 && buf.slice(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  if (mime === "image/webp") return buf.length > 12 && buf.slice(0, 4).toString() === "RIFF" && buf.slice(8, 12).toString() === "WEBP";
+  return false;
+}
+
+app.post("/api/user/avatar", auth, async (req, res) => {
+  try {
+    const m = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/.exec(String((req.body && req.body.image) || ""));
+    if (!m) return res.status(400).json({ error: "Use a JPG, PNG or WebP photo." });
+    const buf = Buffer.from(m[2], "base64");
+    if (buf.length > AVATAR_MAX_BYTES) return res.status(413).json({ error: "That photo is too large." });
+    if (!looksLikeImage(buf, m[1])) return res.status(400).json({ error: "That file isn't a valid image." });
+
+    const user = await User.findByIdAndUpdate(
+      req.userId,
+      { avatarData: buf, avatarType: m[1], avatar: `/api/avatar/${req.userId}?v=${Date.now()}` },
+      { new: true }
+    );
+    if (!user) return res.status(404).json({ error: "user not found" });
+    res.json(safeUser(user));
+  } catch (e) {
+    console.error("avatar upload error:", e.message);
+    res.status(500).json({ error: "server error" });
+  }
+});
+
+app.delete("/api/user/avatar", auth, async (req, res) => {
+  try {
+    const user = await User.findByIdAndUpdate(
+      req.userId,
+      { $set: { avatar: "", avatarType: "" }, $unset: { avatarData: 1 } },
+      { new: true }
+    );
+    if (!user) return res.status(404).json({ error: "user not found" });
+    res.json(safeUser(user));
+  } catch {
+    res.status(500).json({ error: "server error" });
+  }
+});
+
+// Public image — <img> tags can't send a login header, and profile photos are public anyway.
+// The ?v= in the saved URL changes on every upload, so browsers can cache it for a year.
+app.get("/api/avatar/:id", async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(404).end();
+    const user = await User.findById(req.params.id).select("+avatarData avatarType");
+    if (!user || !user.avatarData || !user.avatarType) return res.status(404).end();
+    res.set({
+      "Content-Type": user.avatarType,
+      "Cache-Control": "public, max-age=31536000, immutable",
+      "Cross-Origin-Resource-Policy": "cross-origin",
+      "X-Content-Type-Options": "nosniff",
+    });
+    res.send(user.avatarData);
+  } catch {
+    res.status(404).end();
   }
 });
 

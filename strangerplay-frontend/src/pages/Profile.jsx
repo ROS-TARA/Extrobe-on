@@ -1,305 +1,371 @@
-import { useState } from "react";
+/*
+  Profile.jsx — simple Instagram-style profile.
 
-const DS = {
-  void:"var(--sp-void)", surface:"var(--sp-surface)", surface2:"var(--sp-surface2)",
-  rim:"var(--sp-rim)", plat:"var(--sp-plat)", ash:"var(--sp-ash)", ghost:"var(--sp-ghost)",
-  signal:"var(--sp-signal)", live:"var(--sp-live)", ice:"var(--sp-ice)", gold:"var(--sp-gold)",
-};
+  Everything you change here is saved to the account on the server (photo, name, username,
+  bio, Instagram / TikTok / Facebook links), so it is the same on every device and after refresh.
 
-const css = `
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'Inter', sans-serif; background: var(--sp-void); color: var(--sp-plat); transition: background 0.2s, color 0.2s; }
-  ::-webkit-scrollbar { width: 4px; }
-  ::-webkit-scrollbar-thumb { background: var(--sp-rim); border-radius: 4px; }
-  @keyframes sp-enter { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:translateY(0)} }
-  @keyframes bar-in   { from{width:0} }
-  .pf-btn { background:var(--sp-signal); color:#fff; border:none; border-radius:8px; padding:8px 18px; font-size:13px; font-weight:600; cursor:pointer; transition:filter 0.15s; }
-  .pf-btn:hover { filter:brightness(1.1); }
-  .pf-btn:disabled { opacity:0.45; cursor:not-allowed; }
-  .pf-btn-ghost { background:transparent; border:1px solid var(--sp-rim); border-radius:8px; padding:7px 14px; font-size:13px; color:var(--sp-ash); cursor:pointer; transition:background 0.15s,color 0.15s; }
-  .pf-btn-ghost:hover { background:var(--sp-surface2); color:var(--sp-plat); }
-  .pf-input { background:var(--sp-surface2); border:1.5px solid var(--sp-rim); border-radius:8px; padding:9px 12px; color:var(--sp-plat); font-size:14px; outline:none; width:100%; transition:border-color 0.15s; margin-bottom:8px; }
-  .pf-input:focus { border-color:var(--sp-signal); }
-  .pf-tab { padding:10px 18px; border:none; border-bottom:2px solid transparent; cursor:pointer; font-size:14px; font-weight:600; background:transparent; transition:color 0.15s,border-color 0.15s; }
-  .pf-tab.on  { color:var(--sp-signal); border-bottom-color:var(--sp-signal); }
-  .pf-tab.off { color:var(--sp-ash); }
-  .pf-tab.off:hover { color:var(--sp-plat); }
-  .match-row { transition:background 0.12s; }
-  .match-row:hover { background:var(--sp-surface2) !important; }
-  @media(max-width:580px){ .pf-stats-3{grid-template-columns:1fr 1fr!important} .pf-hide-sm{display:none!important} }
-  @media(max-width:400px){ .pf-stats-3{grid-template-columns:1fr!important} }
-`;
+  Env (frontend .env):  VITE_API_URL=https://your-backend.onrender.com
 
-/* ── Placeholder data — swap for real API calls when ready ── */
-const MATCHES = [
-  { opponent:"alex_k",  flag:"🇺🇸", game:"Don't Laugh",     result:"W", pts:+15, ago:"2h ago" },
-  { opponent:"priya_s", flag:"🇮🇳", game:"Hot Take",        result:"W", pts:+20, ago:"4h ago" },
-  { opponent:"marco_r", flag:"🇧🇷", game:"Echo",            result:"L", pts:-5,  ago:"6h ago" },
-  { opponent:"yuki_jp", flag:"🇯🇵", game:"Finish My Story", result:"W", pts:+18, ago:"1d ago" },
-  { opponent:"luna_mx", flag:"🇲🇽", game:"Mirror Me",       result:"W", pts:+15, ago:"2d ago" },
+  Props:
+    username      string   whose profile to show
+    me            object   the logged-in user (from your app state), or null for guests
+    token         string   the sp_token, or null for guests
+    onUserUpdate  fn(user) called after a save — put the new user into your app state
+    onPlay        fn?      "Find a stranger" button on an empty match list
+    onLogout      fn?      shows a Log out link on your own profile
+*/
+import { useEffect, useRef, useState } from "react";
+
+const API = import.meta.env.VITE_API_URL || "http://localhost:3001";
+const imgSrc = (a) => (!a ? "" : /^https?:\/\//.test(a) ? a : API + a);
+
+async function api(path, { method = "GET", token, body } = {}) {
+  const r = await fetch(API + path, {
+    method,
+    headers: {
+      ...(body ? { "Content-Type": "application/json" } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || "Something went wrong. Try again.");
+  return data;
+}
+
+// Crop to a centred square and shrink to 320px JPEG (~30 KB) before uploading.
+async function toSquareJpeg(file, size = 320) {
+  if (file.size > 15 * 1024 * 1024) throw new Error("That photo is too large. Pick one under 15 MB.");
+  let bmp;
+  try {
+    bmp = await createImageBitmap(file, { imageOrientation: "from-image" });
+  } catch {
+    try { bmp = await createImageBitmap(file); }
+    catch { throw new Error("Couldn't read that photo. Try a JPG or PNG."); }
+  }
+  const side = Math.min(bmp.width, bmp.height);
+  const c = document.createElement("canvas");
+  c.width = c.height = size;
+  c.getContext("2d").drawImage(bmp, (bmp.width - side) / 2, (bmp.height - side) / 2, side, side, 0, 0, size, size);
+  return c.toDataURL("image/jpeg", 0.85);
+}
+
+/* ── icons ── */
+const Svg = ({ children }) => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{children}</svg>
+);
+const IgIcon = () => <Svg><rect x="3" y="3" width="18" height="18" rx="5" /><circle cx="12" cy="12" r="4" /><circle cx="17.2" cy="6.8" r=".6" fill="currentColor" /></Svg>;
+const TtIcon = () => <Svg><path d="M14 3v11.2a3.7 3.7 0 1 1-3.7-3.7" /><path d="M14 3c.4 2.4 2 4 4.5 4.2" /></Svg>;
+const FbIcon = () => <Svg><path d="M14 8.5h2.5V5H14a3.5 3.5 0 0 0-3.5 3.5V11H8v3.5h2.5V21H14v-6.5h2.5l.5-3.5H14V8.5z" /></Svg>;
+
+const PLATFORMS = [
+  { key: "instagram", label: "Instagram", Icon: IgIcon },
+  { key: "tiktok", label: "TikTok", Icon: TtIcon },
+  { key: "facebook", label: "Facebook", Icon: FbIcon },
 ];
 
-const FRIENDS = [
-  { name:"alex_k",  flag:"🇺🇸", pts:2840, online:true  },
-  { name:"priya_s", flag:"🇮🇳", pts:1920, online:true  },
-  { name:"marco_r", flag:"🇧🇷", pts:3410, online:false },
-  { name:"yuki_jp", flag:"🇯🇵", pts:5102, online:true  },
-];
+// Show "sam.k" in the edit box instead of the long saved link
+function handleOf(url) {
+  if (!url) return "";
+  try {
+    const u = new URL(url);
+    if (u.search) return url; // e.g. facebook profile.php?id=… keep the full link
+    const seg = u.pathname.split("/").filter(Boolean)[0] || "";
+    return seg.replace(/^@/, "") || url;
+  } catch { return url; }
+}
 
-const BADGES = [
-  { emoji:"🔥", name:"Hot Streak",    desc:"5 wins in a row",       earned:true  },
-  { emoji:"😐", name:"Straight Face", desc:"Survived a full round", earned:true  },
-  { emoji:"👑", name:"Crowned",       desc:"Reach Diamond tier",    earned:false },
-  { emoji:"🌍", name:"Globetrotter",  desc:"10 countries met",      earned:true  },
-  { emoji:"⚡", name:"Speed Demon",   desc:"Answer under 2s",       earned:true  },
-  { emoji:"🎯", name:"Sharp Eye",     desc:"90%+ Mirror accuracy",  earned:false },
-];
+function Avatar({ user, className }) {
+  const [bad, setBad] = useState(false);
+  const src = imgSrc(user && user.avatar);
+  useEffect(() => setBad(false), [src]);
+  if (src && !bad) {
+    return <img className={className} src={src} alt="" referrerPolicy="no-referrer" onError={() => setBad(true)} />;
+  }
+  const letter = ((user && (user.username || user.name)) || "?").charAt(0).toUpperCase();
+  return <div className={`${className} tz-pf-ph`} aria-hidden="true">{letter}</div>;
+}
 
-function StatCard({ label, value, sub, pct }) {
+export default function Profile({ username, me, token, onUserUpdate, onPlay, onLogout }) {
+  const [p, setP] = useState(null);
+  const [status, setStatus] = useState("loading");
+  const [matches, setMatches] = useState(null);
+  const [editing, setEditing] = useState(false);
+
+  useEffect(() => {
+    let dead = false;
+    setStatus("loading");
+    api(`/api/user/${encodeURIComponent(username)}`, { token })
+      .then((u) => { if (!dead) { setP(u); setStatus("ok"); } })
+      .catch(() => { if (!dead) setStatus("missing"); });
+    return () => { dead = true; };
+  }, [username, token]);
+
+  const pid = p && p._id;
+  useEffect(() => {
+    if (!pid || !token) return;
+    let dead = false;
+    api(`/api/matches/${pid}`, { token })
+      .then((m) => { if (!dead) setMatches(m); })
+      .catch(() => { if (!dead) setMatches([]); });
+    return () => { dead = true; };
+  }, [pid, token]);
+
+  if (status === "loading") return <div className="tz-pf"><style>{CSS}</style><p className="tz-pf-muted">Loading profile…</p></div>;
+  if (status === "missing" || !p) return <div className="tz-pf"><style>{CSS}</style><p className="tz-pf-muted">We couldn’t find that profile.</p></div>;
+
+  const isMe = !!(me && String(me._id) === String(p._id));
+  const links = PLATFORMS.filter((x) => p.socialLinks && /^https:\/\//.test(p.socialLinks[x.key] || ""));
+
+  function saved(u) {
+    setP(u);
+    if (onUserUpdate) onUserUpdate(u);
+  }
+
   return (
-    <div style={{ background:DS.surface, border:`1px solid ${DS.rim}`, borderRadius:12, padding:"14px 16px" }}>
-      <div style={{ fontSize:11, fontWeight:600, color:DS.ash, textTransform:"uppercase", letterSpacing:"0.5px", marginBottom:8 }}>{label}</div>
-      <div style={{ fontSize:28, fontWeight:700, color:DS.plat, lineHeight:1, marginBottom:4 }}>{value}</div>
-      {sub && <div style={{ fontSize:12, color:DS.ash, marginBottom: pct != null ? 10 : 0 }}>{sub}</div>}
-      {pct != null && (
-        <div style={{ height:3, background:DS.rim, borderRadius:3, overflow:"hidden" }}>
-          <div style={{ height:"100%", background:DS.signal, borderRadius:3, width:`${pct}%`, animation:"bar-in 0.8s ease" }} />
+    <div className="tz-pf">
+      <style>{CSS}</style>
+
+      <header className="tz-pf-top">
+        <Avatar user={p} className="tz-pf-av" />
+        <div className="tz-pf-info">
+          <div className="tz-pf-row">
+            <h1 className="tz-pf-user">{p.username}</h1>
+            {isMe && <button className="tz-pf-btn" onClick={() => setEditing(true)}>Edit profile</button>}
+          </div>
+
+          <div className="tz-pf-stats">
+            <span><b>{p.gamesPlayed || 0}</b> games</span>
+            <span><b>{p.wins || 0}</b> wins</span>
+            <span><b>{p.points || 0}</b> points</span>
+          </div>
+
+          <div className="tz-pf-name">{p.name}{p.rank ? <span className="tz-pf-rank">{p.rank}</span> : null}</div>
+          {p.country && <div className="tz-pf-muted">{p.flag ? `${p.flag} ` : ""}{p.country}</div>}
+          {p.bio && <p className="tz-pf-bio">{p.bio}</p>}
+
+          {links.length > 0 && (
+            <div className="tz-pf-links">
+              {links.map(({ key, label, Icon }) => (
+                <a key={key} className="tz-pf-ico" href={p.socialLinks[key]} target="_blank" rel="noopener noreferrer nofollow" aria-label={`${p.username} on ${label}`} title={label}>
+                  <Icon />
+                </a>
+              ))}
+            </div>
+          )}
+
+          {isMe && links.length === 0 && !p.bio && (
+            <button className="tz-pf-hint" onClick={() => setEditing(true)}>Add a bio and your Instagram, TikTok or Facebook.</button>
+          )}
         </div>
-      )}
+      </header>
+
+      <section className="tz-pf-sec">
+        <h2 className="tz-pf-h2">Recent matches</h2>
+        {matches === null && token && <p className="tz-pf-muted">Loading…</p>}
+        {!token && <p className="tz-pf-muted">Log in to see match history.</p>}
+        {matches && matches.length === 0 && (
+          <div className="tz-pf-empty">
+            <p>No matches yet.</p>
+            {isMe && onPlay && <button className="tz-pf-btn" onClick={onPlay}>Find a stranger</button>}
+          </div>
+        )}
+        {matches && matches.length > 0 && (
+          <ul className="tz-pf-list">
+            {matches.slice(0, 8).map((m) => {
+              const mine = String((m.player1 && m.player1._id) || "") === String(p._id);
+              const opp = mine ? m.player2 : m.player1;
+              const won = m.winner && String(m.winner._id) === String(p._id);
+              return (
+                <li key={m._id}>
+                  <span className={won ? "tz-pf-w" : "tz-pf-l"}>{won ? "Won" : "Lost"}</span>
+                  <span>vs {opp ? opp.username : "a player"}</span>
+                  <span className="tz-pf-muted">{m.gameMode || "game"} · {new Date(m.createdAt).toLocaleDateString()}</span>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
+
+      {isMe && onLogout && <button className="tz-pf-out" onClick={onLogout}>Log out</button>}
+
+      {editing && <EditProfile p={p} token={token} onClose={() => setEditing(false)} onSaved={saved} />}
     </div>
   );
 }
 
-/* ══════════════════════════════════
-   MAIN EXPORT
-   Props: onNavigate, user (safeUser shape), points (override), onUserUpdate
-══════════════════════════════════ */
-export default function Profile({ onNavigate, user, points: propPoints, onUserUpdate }) {
-  const API = import.meta.env.VITE_API_URL || "https://extrobe-on.onrender.com";
+function EditProfile({ p, token, onClose, onSaved }) {
+  const start = useRef({
+    name: p.name || "",
+    uname: p.username || "",
+    bio: p.bio || "",
+    instagram: handleOf(p.socialLinks && p.socialLinks.instagram),
+    tiktok: handleOf(p.socialLinks && p.socialLinks.tiktok),
+    facebook: handleOf(p.socialLinks && p.socialLinks.facebook),
+  }).current;
 
-  const [tab,      setTab]      = useState("stats");
-  const [editMode, setEditMode] = useState(false);
-  const [saving,   setSaving]   = useState(false);
-  const [saveErr,  setSaveErr]  = useState("");
-  const [copied,   setCopied]   = useState(false);
+  const [v, setV] = useState(start);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const fileRef = useRef(null);
 
-  const [username, setUsername] = useState(user?.username || "guest");
-  const [bio,      setBio]      = useState(user?.bio      || "");
+  useEffect(() => {
+    const k = (e) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, [onClose]);
 
-  const points      = propPoints ?? user?.points      ?? 0;
-  const wins        = user?.wins        ?? 0;
-  const gamesPlayed = user?.gamesPlayed ?? 0;
-  const followers   = user?.followers   ?? 0;
-  const following   = user?.following   ?? 0;
-  const flag        = user?.flag        ?? "🌍";
-  const rank        = user?.rank        ?? "Bronze I";
-  const joined      = user?.createdAt
-    ? new Date(user.createdAt).toLocaleDateString(undefined, { month:"short", year:"numeric" })
-    : null;
+  const dirty = JSON.stringify(v) !== JSON.stringify(start);
+  const set = (k) => (e) => setV({ ...v, [k]: e.target.value });
 
-  async function saveProfile() {
-    setSaving(true); setSaveErr("");
+  async function pick(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    setErr("");
+    setPhotoBusy(true);
     try {
-      const token = localStorage.getItem("tz_token");
-      const res = await fetch(`${API}/api/user/profile`, {
-        method:"PATCH",
-        headers:{ "Content-Type":"application/json", Authorization:`Bearer ${token}` },
-        body:JSON.stringify({ username, bio }),
+      if (!file.type.startsWith("image/")) throw new Error("Pick an image file.");
+      const image = await toSquareJpeg(file);
+      onSaved(await api("/api/user/avatar", { method: "POST", token, body: { image } }));
+    } catch (e2) {
+      setErr(e2.message || "Couldn’t use that photo.");
+    } finally {
+      setPhotoBusy(false);
+    }
+  }
+
+  async function removePhoto() {
+    setErr("");
+    setPhotoBusy(true);
+    try {
+      onSaved(await api("/api/user/avatar", { method: "DELETE", token }));
+    } catch (e2) {
+      setErr(e2.message);
+    } finally {
+      setPhotoBusy(false);
+    }
+  }
+
+  async function save() {
+    setErr("");
+    setBusy(true);
+    try {
+      const u = await api("/api/user/settings", {
+        method: "PATCH",
+        token,
+        body: {
+          name: v.name,
+          username: v.uname,
+          bio: v.bio,
+          socialLinks: { instagram: v.instagram, tiktok: v.tiktok, facebook: v.facebook },
+        },
       });
-      const d = await res.json();
-      if (!res.ok) setSaveErr(d.error || "Save failed");
-      else { onUserUpdate?.(d.user); setEditMode(false); }
-    } catch { setSaveErr("Can't reach server"); }
-    setSaving(false);
+      onSaved(u);
+      onClose();
+    } catch (e2) {
+      setErr(e2.message);
+    } finally {
+      setBusy(false);
+    }
   }
-
-  function copyLink() {
-    navigator.clipboard?.writeText(`${window.location.origin}/u/${username}`)
-      .then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); });
-  }
-
-  const TABS = ["stats", "badges", "history", "friends"];
-  const winRate = gamesPlayed ? Math.round((wins / gamesPlayed) * 100) : 0;
 
   return (
-    <>
-      <style>{css}</style>
-      <div style={{ minHeight:"100dvh", background:DS.void, paddingTop:56, paddingBottom:80 }}>
-        <div style={{ maxWidth:740, margin:"0 auto", padding:"0 clamp(12px,4vw,24px)" }}>
-
-          <button className="pf-btn-ghost" style={{ marginBottom:20 }} onClick={() => onNavigate?.("home")}>← Back</button>
-
-          {/* ── Profile card ── */}
-          <div style={{ background:DS.surface, border:`1px solid ${DS.rim}`, borderRadius:12, padding:"20px", marginBottom:14 }}>
-            <div style={{ display:"flex", gap:16, alignItems:"flex-start", flexWrap:"wrap" }}>
-
-              {/* Avatar */}
-              <div style={{ position:"relative", flexShrink:0 }}>
-                <div style={{ width:68, height:68, borderRadius:"50%", background:DS.surface2, border:`2px solid ${DS.signal}`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:28 }}>🧑</div>
-                {/* online dot */}
-                <div style={{ position:"absolute", bottom:2, right:2, width:12, height:12, borderRadius:"50%", background:DS.ice, border:`2px solid ${DS.surface}` }} />
-              </div>
-
-              {/* Name + meta */}
-              <div style={{ flex:1, minWidth:0 }}>
-                {editMode ? (
-                  <>
-                    <input className="pf-input" value={username} onChange={e => setUsername(e.target.value)} placeholder="Username" style={{ fontWeight:700, fontSize:17 }} />
-                    <input className="pf-input" value={bio}      onChange={e => setBio(e.target.value)}      placeholder="Short bio" />
-                  </>
-                ) : (
-                  <>
-                    <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", marginBottom:4 }}>
-                      <span style={{ fontSize:19, fontWeight:700, color:DS.plat }}>{username}</span>
-                      <span style={{ fontSize:16 }}>{flag}</span>
-                      <span style={{ background:`${DS.signal}18`, color:DS.signal, border:`1px solid ${DS.signal}44`, borderRadius:6, padding:"2px 9px", fontSize:11, fontWeight:600 }}>{rank}</span>
-                    </div>
-                    <div style={{ fontSize:13, color:DS.ash, marginBottom:10 }}>
-                      {bio || "no bio yet"}{joined && <span style={{ color:DS.ghost }}> · joined {joined}</span>}
-                    </div>
-                  </>
-                )}
-
-                <div style={{ display:"flex", gap:18, flexWrap:"wrap" }}>
-                  {[[following,"following"],[followers,"followers"],[wins,"wins"],[gamesPlayed,"games"]].map(([v,l]) => (
-                    <div key={l} style={{ fontSize:13 }}>
-                      <span style={{ fontWeight:700, color:DS.plat }}>{v} </span>
-                      <span style={{ color:DS.ash }}>{l}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Points ring */}
-              <div style={{ textAlign:"center", flexShrink:0 }}>
-                <div style={{ position:"relative", width:68, height:68 }}>
-                  <svg width="68" height="68" style={{ transform:"rotate(-90deg)" }}>
-                    <circle cx="34" cy="34" r="26" fill="none" stroke={DS.rim} strokeWidth="4" />
-                    <circle cx="34" cy="34" r="26" fill="none" stroke={DS.signal} strokeWidth="4"
-                      strokeDasharray={2*Math.PI*26}
-                      strokeDashoffset={2*Math.PI*26 * (1 - Math.min(points/100, 1))}
-                      strokeLinecap="round" style={{ transition:"stroke-dashoffset 0.8s ease" }} />
-                  </svg>
-                  <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center" }}>
-                    <div style={{ fontSize:15, fontWeight:700, color:DS.gold, lineHeight:1 }}>{points}</div>
-                    <div style={{ fontSize:8, color:DS.ash, fontFamily:"'JetBrains Mono',monospace" }}>PTS</div>
-                  </div>
-                </div>
-                <div style={{ fontSize:10, color:DS.ash, marginTop:4 }}>{points >= 100 ? "unlocked" : `${100-points} to go`}</div>
-              </div>
-            </div>
-
-            {/* Actions */}
-            <div style={{ display:"flex", gap:8, marginTop:16, flexWrap:"wrap" }}>
-              {editMode ? (
-                <>
-                  <button className="pf-btn" onClick={saveProfile} disabled={saving}>{saving ? "Saving…" : "Save"}</button>
-                  <button className="pf-btn-ghost" onClick={() => { setEditMode(false); setSaveErr(""); }}>Cancel</button>
-                  {saveErr && <span style={{ fontSize:12, color:DS.live, alignSelf:"center" }}>{saveErr}</span>}
-                </>
-              ) : (
-                <>
-                  <button className="pf-btn" onClick={() => setEditMode(true)}>Edit profile</button>
-                  <button className="pf-btn-ghost" onClick={copyLink}>{copied ? "Copied!" : "🔗 Share"}</button>
-                  <button className="pf-btn-ghost" onClick={() => onNavigate?.("settings")}>⚙️ Settings</button>
-                </>
-              )}
-            </div>
-          </div>
-
-          {/* ── Tabs ── */}
-          <div style={{ display:"flex", borderBottom:`1px solid ${DS.rim}`, background:DS.surface, borderRadius:"12px 12px 0 0", overflowX:"auto", marginBottom:14 }}>
-            {TABS.map(t => (
-              <button key={t} className={`pf-tab ${tab===t?"on":"off"}`} onClick={() => setTab(t)} style={{ textTransform:"capitalize" }}>{t}</button>
-            ))}
-          </div>
-
-          {/* ── STATS ── */}
-          {tab === "stats" && (
-            <div>
-              <div className="pf-stats-3" style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:10, marginBottom:14 }}>
-                <StatCard label="Points"   value={points}    sub={points<100?`${100-points} to first reward`:"reward unlocked"} pct={Math.min(points,100)} />
-                <StatCard label="Games"    value={gamesPlayed} sub="total matches"   pct={Math.min(gamesPlayed*10,100)} />
-                <StatCard label="Win rate" value={gamesPlayed?`${winRate}%`:"—"}    sub={gamesPlayed?`${wins}W · ${gamesPlayed-wins}L`:"play first"} pct={winRate} />
-              </div>
-              <div style={{ background:DS.surface, border:`1px solid ${DS.rim}`, borderRadius:12, padding:"16px 18px" }}>
-                <div style={{ fontSize:11, fontWeight:600, color:DS.ash, textTransform:"uppercase", letterSpacing:"0.5px", marginBottom:14 }}>By game</div>
-                {[["Echo",3,2],["Don't Laugh",4,2],["Mirror Me",2,0],["Vibe Check",2,1],["Hot Take",1,1]].map(([name,pl,w]) => (
-                  <div key={name} style={{ marginBottom:13 }}>
-                    <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, marginBottom:5 }}>
-                      <span style={{ color:DS.plat }}>{name}</span>
-                      <span style={{ color:DS.ash, fontFamily:"'JetBrains Mono',monospace", fontSize:11 }}>{w}W / {pl-w}L</span>
-                    </div>
-                    <div style={{ height:3, background:DS.rim, borderRadius:3 }}>
-                      <div style={{ height:"100%", background:DS.signal, borderRadius:3, width:`${pl?(w/pl)*100:5}%` }} />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* ── BADGES ── */}
-          {tab === "badges" && (
-            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(130px,1fr))", gap:10 }}>
-              {BADGES.map(b => (
-                <div key={b.name} style={{
-                  background:DS.surface, border:`1px solid ${b.earned ? `${DS.signal}44` : DS.rim}`,
-                  borderRadius:12, padding:"14px 12px", textAlign:"center",
-                  opacity: b.earned ? 1 : 0.4,
-                }}>
-                  <div style={{ fontSize:26, marginBottom:7 }}>{b.emoji}</div>
-                  <div style={{ fontSize:13, fontWeight:600, color:DS.plat, marginBottom:3 }}>{b.name}</div>
-                  <div style={{ fontSize:11, color:DS.ash }}>{b.desc}</div>
-                  {!b.earned && <div style={{ fontSize:10, color:DS.ghost, marginTop:5 }}>🔒 locked</div>}
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* ── HISTORY ── */}
-          {tab === "history" && (
-            <div style={{ background:DS.surface, border:`1px solid ${DS.rim}`, borderRadius:12, overflow:"hidden" }}>
-              <div style={{ display:"grid", gridTemplateColumns:"32px 1fr 80px 52px 56px", gap:8, padding:"9px 16px", borderBottom:`1px solid ${DS.rim}`, fontSize:11, fontWeight:600, color:DS.ash, textTransform:"uppercase" }}>
-                <span/><span>Opponent</span><span className="pf-hide-sm">Game</span><span>Pts</span><span className="pf-hide-sm">When</span>
-              </div>
-              {MATCHES.map((m,i) => (
-                <div key={i} className="match-row" style={{
-                  display:"grid", gridTemplateColumns:"32px 1fr 80px 52px 56px", gap:8,
-                  padding:"11px 16px", borderBottom:`1px solid ${DS.rim}`, alignItems:"center",
-                }}>
-                  <div style={{ width:26, height:26, borderRadius:"50%", background: m.result==="W" ? `${DS.ice}20` : `${DS.live}20`, border:`1px solid ${m.result==="W" ? DS.ice : DS.live}55`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:10, fontWeight:700, color: m.result==="W" ? DS.ice : DS.live }}>{m.result}</div>
-                  <div style={{ fontSize:13, fontWeight:500 }}>{m.flag} {m.opponent}</div>
-                  <div className="pf-hide-sm" style={{ fontSize:12, color:DS.ash }}>{m.game}</div>
-                  <div style={{ fontSize:12, fontWeight:700, fontFamily:"'JetBrains Mono',monospace", color: m.pts>0 ? DS.ice : DS.live }}>{m.pts>0?`+${m.pts}`:m.pts}</div>
-                  <div className="pf-hide-sm" style={{ fontSize:11, color:DS.ghost }}>{m.ago}</div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* ── FRIENDS ── */}
-          {tab === "friends" && (
-            <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-              {FRIENDS.map(f => (
-                <div key={f.name} style={{ background:DS.surface, border:`1px solid ${DS.rim}`, borderRadius:12, padding:"12px 16px", display:"flex", alignItems:"center", gap:12 }}>
-                  <div style={{ position:"relative" }}>
-                    <div style={{ width:38, height:38, borderRadius:"50%", background:DS.surface2, display:"flex", alignItems:"center", justifyContent:"center", fontSize:17 }}>🧑</div>
-                    <div style={{ position:"absolute", bottom:0, right:0, width:10, height:10, borderRadius:"50%", background: f.online ? DS.ice : DS.ghost, border:`2px solid ${DS.surface}` }} />
-                  </div>
-                  <div style={{ flex:1 }}>
-                    <div style={{ fontSize:14, fontWeight:500 }}>{f.flag} {f.name}</div>
-                    <div style={{ fontSize:12, color:DS.ash, fontFamily:"'JetBrains Mono',monospace" }}>{f.pts.toLocaleString()} pts</div>
-                  </div>
-                  <button className="pf-btn-ghost" style={{ fontSize:12, padding:"6px 12px", opacity:0.4 }} disabled title="Coming when matchmaking is wired">Challenge</button>
-                </div>
-              ))}
-            </div>
-          )}
-
+    <div className="tz-pf-back" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="tz-pf-card" role="dialog" aria-modal="true" aria-labelledby="tz-pf-et">
+        <div className="tz-pf-bar">
+          <button className="tz-pf-text" onClick={onClose}>Cancel</button>
+          <h2 id="tz-pf-et">Edit profile</h2>
+          <button className="tz-pf-text tz-pf-save" onClick={save} disabled={!dirty || busy}>{busy ? "Saving…" : "Save"}</button>
         </div>
+
+        <div className="tz-pf-photo">
+          <Avatar user={p} className="tz-pf-av tz-pf-av-sm" />
+          <div>
+            <div className="tz-pf-name">{p.username}</div>
+            <input ref={fileRef} type="file" accept="image/*" hidden onChange={pick} />
+            <button className="tz-pf-link" onClick={() => fileRef.current && fileRef.current.click()} disabled={photoBusy}>
+              {photoBusy ? "Working…" : "Change photo"}
+            </button>
+            {p.avatar && !photoBusy && <button className="tz-pf-link tz-pf-danger" onClick={removePhoto}>Remove</button>}
+          </div>
+        </div>
+
+        <label className="tz-pf-lab">Name
+          <input className="tz-pf-in" value={v.name} onChange={set("name")} maxLength={40} />
+        </label>
+        <label className="tz-pf-lab">Username
+          <input className="tz-pf-in" value={v.uname} onChange={set("uname")} maxLength={20} autoCapitalize="none" autoCorrect="off" />
+        </label>
+        <label className="tz-pf-lab">Bio
+          <textarea className="tz-pf-in" rows={3} value={v.bio} onChange={set("bio")} maxLength={150} />
+          <span className="tz-pf-count">{v.bio.length}/150</span>
+        </label>
+
+        {PLATFORMS.map(({ key, label, Icon }) => (
+          <label className="tz-pf-lab" key={key}>
+            <span className="tz-pf-plat"><Icon /> {label}</span>
+            <input className="tz-pf-in" value={v[key]} onChange={set(key)} placeholder="username or link" maxLength={200} autoCapitalize="none" autoCorrect="off" />
+          </label>
+        ))}
+
+        {err && <p className="tz-pf-err" role="alert">{err}</p>}
       </div>
-    </>
+    </div>
   );
 }
+
+const CSS = `
+.tz-pf{max-width:720px;margin:0 auto;padding:28px 16px 64px;color:#f4ede1;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.tz-pf *{box-sizing:border-box}
+.tz-pf-muted{color:#a39379;font-size:14px;margin:4px 0}
+.tz-pf-top{display:grid;grid-template-columns:auto 1fr;gap:20px 28px;align-items:start}
+.tz-pf-av{width:92px;height:92px;border-radius:50%;object-fit:cover;background:#241d13;border:1px solid #3a2f21}
+.tz-pf-ph{display:grid;place-items:center;font-size:38px;font-weight:600;color:#1a1209;background:#c97b3d;border:0}
+@media (min-width:640px){.tz-pf-av{width:150px;height:150px}.tz-pf-ph{font-size:60px}}
+.tz-pf-row{display:flex;flex-wrap:wrap;align-items:center;gap:12px 16px}
+.tz-pf-user{margin:0;font-size:21px;font-weight:500}
+.tz-pf-btn{padding:8px 16px;border:1px solid #3a2f21;border-radius:8px;background:#241d13;color:#f4ede1;font:inherit;font-size:14px;font-weight:600;cursor:pointer}
+.tz-pf-btn:hover{background:#2f261a}
+.tz-pf-stats{display:flex;flex-wrap:wrap;gap:6px 26px;margin:14px 0;font-size:15px}
+.tz-pf-stats b{font-weight:600}
+.tz-pf-name{font-weight:600;font-size:15px}
+.tz-pf-rank{margin-left:8px;padding:2px 8px;border:1px solid #3a2f21;border-radius:999px;color:#c9a47a;font-size:12px;font-weight:500}
+.tz-pf-bio{margin:6px 0 0;font-size:15px;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere}
+.tz-pf-links{display:flex;gap:10px;margin-top:14px}
+.tz-pf-ico{display:grid;place-items:center;width:38px;height:38px;border:1px solid #3a2f21;border-radius:50%;color:#f4ede1;text-decoration:none}
+.tz-pf-ico:hover{background:#241d13;border-color:#c97b3d}
+.tz-pf-hint{margin-top:12px;padding:0;border:0;background:none;color:#c97b3d;font:inherit;font-size:14px;cursor:pointer;text-align:left}
+.tz-pf-sec{margin-top:34px;padding-top:18px;border-top:1px solid #3a2f21}
+.tz-pf-h2{margin:0 0 12px;font-size:16px;font-weight:600}
+.tz-pf-empty{padding:26px 0;text-align:center;color:#a39379}
+.tz-pf-empty p{margin:0 0 12px}
+.tz-pf-list{margin:0;padding:0;list-style:none}
+.tz-pf-list li{display:grid;grid-template-columns:52px 1fr auto;gap:10px;align-items:center;padding:11px 0;border-bottom:1px solid #2a2218;font-size:14px}
+.tz-pf-w{color:#6fd391;font-weight:600}.tz-pf-l{color:#ff9a86;font-weight:600}
+.tz-pf-out{margin:34px auto 0;display:block;border:0;background:none;color:#a39379;font:inherit;font-size:14px;text-decoration:underline;text-underline-offset:3px;cursor:pointer}
+.tz-pf button:focus-visible,.tz-pf a:focus-visible,.tz-pf-card button:focus-visible{outline:2px solid #c97b3d;outline-offset:2px}
+
+.tz-pf-back{position:fixed;inset:0;z-index:1000;display:grid;place-items:center;padding:12px;background:rgba(8,6,4,.74);backdrop-filter:blur(6px)}
+.tz-pf-card{width:100%;max-width:440px;max-height:calc(100dvh - 24px);overflow:auto;padding:0 20px 22px;background:#17130d;color:#f4ede1;border:1px solid #3a2f21;border-radius:14px;box-shadow:0 24px 80px rgba(0,0,0,.55);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.tz-pf-bar{position:sticky;top:0;display:flex;align-items:center;justify-content:space-between;margin:0 -20px 14px;padding:14px 20px;background:#17130d;border-bottom:1px solid #3a2f21}
+.tz-pf-bar h2{margin:0;font-size:16px;font-weight:600}
+.tz-pf-text{padding:4px;border:0;background:none;color:#a39379;font:inherit;font-size:15px;cursor:pointer}
+.tz-pf-save{color:#c97b3d;font-weight:600}
+.tz-pf-text:disabled{opacity:.4;cursor:not-allowed}
+.tz-pf-photo{display:flex;align-items:center;gap:16px;margin-bottom:18px}
+.tz-pf-av-sm{width:64px;height:64px;font-size:26px}
+.tz-pf-link{display:inline-block;margin:4px 14px 0 0;padding:0;border:0;background:none;color:#c97b3d;font:inherit;font-size:14px;font-weight:600;cursor:pointer}
+.tz-pf-link:disabled{opacity:.5}
+.tz-pf-danger{color:#ff9a86}
+.tz-pf-lab{position:relative;display:block;margin-bottom:14px;color:#bfae92;font-size:13px}
+.tz-pf-plat{display:inline-flex;align-items:center;gap:6px}
+.tz-pf-plat svg{width:16px;height:16px}
+.tz-pf-in{display:block;width:100%;margin-top:6px;padding:11px 13px;background:#100d09;color:#f4ede1;border:1px solid #3a2f21;border-radius:10px;font:inherit;font-size:16px;resize:vertical}
+.tz-pf-in::placeholder{color:#7c6e58}
+.tz-pf-in:focus{outline:2px solid #c97b3d;outline-offset:1px;border-color:transparent}
+.tz-pf-count{position:absolute;right:2px;top:0;color:#7c6e58;font-size:12px}
+.tz-pf-err{margin:6px 0 0;color:#ff9a86;font-size:14px;line-height:1.4}
+`;
