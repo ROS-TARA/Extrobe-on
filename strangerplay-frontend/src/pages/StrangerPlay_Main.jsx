@@ -1991,9 +1991,15 @@ export default function StrangerPlay() {
         <LoginSignup onNavigate={goTo} onLogin={handleLogin} />
       )}
 
-      {/* BUG FIX #3: user and points now passed to Profile */}
       {page === "profile" && (
-        <Profile onNavigate={goTo} user={user} points={points} onUserUpdate={handleLogin} />
+        <Profile
+          username={user?.username}
+          me={user}
+          token={localStorage.getItem("tz_token")}
+          onUserUpdate={handleLogin}
+          onPlay={() => goTo("play")}
+          onLogout={handleLogout}
+        />
       )}
 
       {page === "rewards"  && <Rewards  onNavigate={goTo} />}
