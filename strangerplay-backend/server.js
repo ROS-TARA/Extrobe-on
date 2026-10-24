@@ -35,12 +35,6 @@ const cors       = require("cors");
 const crypto     = require("crypto");
 const nodemailer = require("nodemailer");
 
-// Google sign-in: verifies the ID token Google gives the browser. No client secret needed.
-//   npm install google-auth-library      +      GOOGLE_CLIENT_ID in Render env vars
-let OAuth2Client = null;
-try { ({ OAuth2Client } = require("google-auth-library")); } catch { /* not installed yet */ }
-const googleClient = OAuth2Client && process.env.GOOGLE_CLIENT_ID ? new OAuth2Client(process.env.GOOGLE_CLIENT_ID) : null;
-
 const app    = express();
 const server = http.createServer(app);
 
@@ -72,7 +66,7 @@ app.use(cors({
 // parsing for that one path only; its own route below applies express.raw().
 app.use((req, res, next) => {
   if (req.path === "/api/coins/webhook") return next();
-  express.json({ limit: "300kb" })(req, res, next);
+  express.json()(req, res, next);
 });
 
 /* ─────────────────────────────────────────────
@@ -87,9 +81,9 @@ const io = new Server(server, {
       cb(new Error("CORS"));
     },
     methods: ["GET","POST"],
+      pingTimeout: 60000,   // wait 60s before declaring disconnect (default: 20s)
+  pingInterval: 25000, 
   },
-  pingTimeout: 60000,    // wait 60s before declaring disconnect (default: 20s)
-  pingInterval: 25000,
 });
 
 /* ─────────────────────────────────────────────
@@ -107,11 +101,6 @@ const UserSchema = new mongoose.Schema({
   username:    { type: String, required: true, unique: true, lowercase: true },
   email:       { type: String, required: true, unique: true, lowercase: true },
   password:    { type: String, required: true },
-  googleId:    { type: String, unique: true, sparse: true },
-  hasPassword: { type: Boolean, default: true },   // false = signed up with Google and has no password of their own
-  avatar:      { type: String, default: "" },          // URL the app shows (Google photo, or /api/avatar/<id>)
-  avatarData:  { type: Buffer, select: false },        // uploaded photo bytes — never loaded unless asked for
-  avatarType:  { type: String, default: "" },
   flag:        { type: String, default: "🌍" },
   country:     { type: String, default: "" },
   points:      { type: Number, default: 0 },
@@ -126,7 +115,6 @@ const UserSchema = new mongoose.Schema({
     tiktok:    { type: String, default: "" },
     youtube:   { type: String, default: "" },
     twitter:   { type: String, default: "" },
-    facebook:  { type: String, default: "" },
   },
   rank:        { type: String, default: "Bronze I" },
   globalRank:  { type: Number, default: 9999 },
@@ -149,8 +137,6 @@ const MatchSchema = new mongoose.Schema({
 
 const User  = mongoose.model("User",  UserSchema);
 const Match = mongoose.model("Match", MatchSchema);
-// One row per Stripe checkout session already credited — stops a retried webhook paying coins twice
-const PaidSession = mongoose.model("PaidSession", new mongoose.Schema({ _id: String, at: { type: Date, default: Date.now } }));
 
 /* ─────────────────────────────────────────────
    HELPERS
@@ -200,24 +186,6 @@ function calculateRank(points) {
   return "Bronze I";
 }
 
-// Who is calling? (optional login — returns the user id or null)
-function optionalViewerId(req) {
-  const h = req.headers.authorization;
-  if (!h || !h.startsWith("Bearer ")) return null;
-  try { return jwt.verify(h.slice(7), JWT_SECRET).id; } catch { return null; }
-}
-
-// What OTHER people may see: no email, no coin balance. You still see your own in full.
-function publicUser(u, viewerId = null) {
-  const out = safeUser(u);
-  if (viewerId && String(u._id) === String(viewerId)) return out;
-  delete out.email;
-  delete out.coins;
-  delete out.hasPassword;
-  delete out.googleLinked;
-  return out;
-}
-
 // Strip password before sending user to frontend
 function safeUser(u) {
   return {
@@ -226,9 +194,6 @@ function safeUser(u) {
     username: u.username,
     email: u.email,
     flag: u.flag,
-    avatar: u.avatar || "",
-    hasPassword: u.hasPassword !== false,
-    googleLinked: !!u.googleId,
     country: u.country,
     points: u.points,
     coins: u.coins,
@@ -326,7 +291,6 @@ app.post("/api/auth/signin", async (req, res) => {
   try {
     const user = await User.findOne({ email: email.toLowerCase() });
     if (!user) return res.status(401).json({ error: "wrong email or password" });
-    if (user.hasPassword === false) return res.status(401).json({ error: "This account signs in with Google. Tap Continue with Google." });
 
     const ok = await bcrypt.compare(password, user.password);
     if (!ok)  return res.status(401).json({ error: "wrong email or password" });
@@ -336,72 +300,6 @@ app.post("/api/auth/signin", async (req, res) => {
   } catch (e) {
     console.error("signin error:", e);
     res.status(500).json({ error: "server error" });
-  }
-});
-
-// Pick a free username like "sam" / "sam4821" from the Google name
-async function uniqueUsername(base) {
-  let clean = String(base || "").toLowerCase().replace(/[^a-z0-9_]/g, "").slice(0, 15);
-  if (clean.length < 3) clean = "player" + clean;
-  for (let i = 0; i < 8; i++) {
-    const candidate = i === 0 ? clean : clean + Math.floor(1000 + Math.random() * 9000);
-    if (!(await User.exists({ username: candidate }))) return candidate;
-  }
-  return clean + crypto.randomBytes(3).toString("hex");
-}
-
-// POST /api/auth/google — "Continue with Google"
-// The browser sends the ID token Google signed. We verify it (signature, expiry, and that it
-// was issued for OUR client id), then log in, link, or create the account.
-app.post("/api/auth/google", async (req, res) => {
-  if (!googleClient) return res.status(503).json({ error: "Google sign-in isn't set up yet." });
-  const { credential } = req.body || {};
-  if (!credential || typeof credential !== "string") return res.status(400).json({ error: "missing Google credential" });
-
-  try {
-    const ticket = await googleClient.verifyIdToken({ idToken: credential, audience: process.env.GOOGLE_CLIENT_ID });
-    const p = ticket.getPayload();
-    if (!p || !p.sub || !p.email || p.email_verified !== true) {
-      return res.status(401).json({ error: "Your Google email isn't verified." });
-    }
-    const email = p.email.toLowerCase();
-    let isNew = false;
-
-    let user = await User.findOne({ googleId: p.sub });
-    if (!user) {
-      const byEmail = await User.findOne({ email });
-      if (byEmail) {
-        // Same email already has an account → link Google to it.
-        // Email/password signup doesn't prove the email is theirs, so someone could have registered
-        // this address earlier with a password they know. Google just proved the real owner, so
-        // we invalidate any old password. (They can set a new one with "Forgot password".)
-        byEmail.googleId = p.sub;
-        if (byEmail.hasPassword !== false) {
-          byEmail.password = await bcrypt.hash(crypto.randomBytes(32).toString("hex"), 10);
-          byEmail.hasPassword = false;
-        }
-        if (!byEmail.avatar && p.picture) byEmail.avatar = p.picture;
-        await byEmail.save();
-        user = byEmail;
-      } else {
-        const username = await uniqueUsername(p.given_name || p.name || email.split("@")[0]);
-        user = await User.create({
-          name: p.name || username,
-          username,
-          email,
-          password: await bcrypt.hash(crypto.randomBytes(32).toString("hex"), 10),
-          hasPassword: false,
-          googleId: p.sub,
-          avatar: p.picture || "",
-          points: 0, wins: 0, gamesPlayed: 0,
-        });
-        isNew = true;
-      }
-    }
-    return res.json({ token: signToken(user._id), user: safeUser(user), isNew });
-  } catch (e) {
-    console.error("google sign-in error:", e.message);
-    return res.status(401).json({ error: "Google sign-in failed. Try again." });
   }
 });
 
@@ -453,7 +351,6 @@ app.post("/api/auth/reset-password", async (req, res) => {
     if (!user) return res.status(400).json({ error: "reset link is invalid or expired" });
 
     user.password = await bcrypt.hash(password, 10);
-    user.hasPassword = true;
     user.resetTokenHash = null;
     user.resetTokenExpiry = null;
     await user.save();
@@ -479,7 +376,6 @@ app.post("/api/auth/change-password", auth, async (req, res) => {
     const user = await User.findById(req.userId);
     if (!user) return res.status(404).json({ error: "user not found" });
 
-    if (user.hasPassword === false) return res.status(400).json({ error: "This account uses Google sign-in. Use Forgot password to set a password." });
     const match = await bcrypt.compare(currentPassword, user.password);
     if (!match) return res.status(401).json({ error: "current password is wrong" });
 
@@ -551,24 +447,8 @@ app.post("/api/coins/webhook", express.raw({ type: "application/json" }), async 
     return res.status(400).end();
   }
   if (event.type === "checkout.session.completed") {
-    const session = event.data.object;
-    if (session.payment_status === "paid") {
-      try {
-        await PaidSession.create({ _id: session.id });          // duplicate key → already credited
-      } catch (e) {
-        if (e && e.code === 11000) return res.json({ received: true });
-        console.error("webhook marker error:", e.message);
-        return res.status(500).end();                           // Stripe will retry
-      }
-      try {
-        const { userId, coins } = session.metadata;
-        await User.findByIdAndUpdate(userId, { $inc: { coins: Number(coins) } });
-      } catch (e) {
-        console.error("webhook credit error:", e.message);
-        await PaidSession.deleteOne({ _id: session.id }).catch(() => {});   // allow the retry to credit
-        return res.status(500).end();
-      }
-    }
+    const { userId, coins } = event.data.object.metadata;
+    await User.findByIdAndUpdate(userId, { $inc: { coins: Number(coins) } });
   }
   res.json({ received: true });
 });
@@ -582,167 +462,49 @@ app.get("/api/user/:username", async (req, res) => {
   try {
     const user = await User.findOne({ username: req.params.username.toLowerCase() });
     if (!user) return res.status(404).json({ error: "user not found" });
-    res.json(publicUser(user, optionalViewerId(req)));
-  } catch {
-    res.status(500).json({ error: "server error" });
-  }
-});
-
-// GET /api/me — who am I? (lets the app reload the saved profile after a refresh)
-app.get("/api/me", auth, async (req, res) => {
-  try {
-    const user = await User.findById(req.userId);
-    if (!user) return res.status(404).json({ error: "user not found" });
     res.json(safeUser(user));
   } catch {
     res.status(500).json({ error: "server error" });
   }
 });
 
-/* Social links: people type "@sam" or paste a link. We store a clean https link, and ONLY for
-   the right site — so nobody can save a javascript: link or a look-alike domain that other
-   users would then click. */
-const SOCIAL = {
-  instagram: { hosts: ["instagram.com"],                   build: h => `https://www.instagram.com/${h}` },
-  tiktok:    { hosts: ["tiktok.com"],                      build: h => `https://www.tiktok.com/@${h}` },
-  facebook:  { hosts: ["facebook.com", "fb.com", "fb.me"], build: h => `https://www.facebook.com/${h}` },
-};
-function normalizeSocial(platform, raw) {
-  const cfg = SOCIAL[platform];
-  const v = String(raw == null ? "" : raw).trim();
-  if (!v) return "";                                   // empty = remove the link
-  if (/^https?:\/\//i.test(v) || /^(www\.|m\.)?[a-z0-9-]+\.[a-z]{2,}\//i.test(v)) {
-    let u;
-    try { u = new URL(/^https?:/i.test(v) ? v : "https://" + v); } catch { return null; }
-    const host = u.hostname.toLowerCase();
-    if (!cfg.hosts.some(h => host === h || host.endsWith("." + h))) return null;
-    u.protocol = "https:"; u.username = ""; u.password = ""; u.hash = "";
-    const out = u.toString();
-    return out.length <= 200 ? out : null;
-  }
-  const handle = v.replace(/^@/, "");
-  if (!/^[A-Za-z0-9._-]{1,50}$/.test(handle)) return null;
-  return cfg.build(handle);
-}
-
-// PATCH /api/user/settings — name, username, bio, social links (saved to the account)
+// PATCH /api/user/settings — update bio, flag, etc.
 app.patch("/api/user/settings", auth, async (req, res) => {
   try {
-    const { name, username, email, bio, flag, country, socialLinks } = req.body || {};
+    const { username, email, bio, flag, country, socialLinks } = req.body;
     const update = {};
-
-    if (name !== undefined) {
-      const n = String(name).trim();
-      if (n.length < 1 || n.length > 40) return res.status(400).json({ error: "Name must be 1–40 characters." });
-      update.name = n;
-    }
-    if (bio !== undefined) {
-      const b = String(bio).trim();
-      if (b.length > 150) return res.status(400).json({ error: "Bio can be up to 150 characters." });
-      update.bio = b;
-    }
-    if (flag)    update.flag = String(flag).slice(0, 16);
-    if (country) update.country = String(country).slice(0, 60);
-
+    if (bio !== undefined) update.bio = bio;
+    if (flag)               update.flag = flag;
+    if (country)            update.country = country;
     if (socialLinks && typeof socialLinks === "object") {
-      for (const key of Object.keys(SOCIAL)) {
-        if (socialLinks[key] === undefined) continue;
-        const clean = normalizeSocial(key, socialLinks[key]);
-        if (clean === null) {
-          const label = key[0].toUpperCase() + key.slice(1);
-          return res.status(400).json({ error: `That ${label} link doesn't look right. Use your username or a ${label} link.` });
-        }
-        update[`socialLinks.${key}`] = clean;
+      // Merge rather than overwrite — Profile only sends what it has, and
+      // Settings might only send some fields. Build it as dot-paths so
+      // Mongo merges instead of replacing the whole sub-object with undefineds.
+      for (const key of ["instagram", "tiktok", "youtube", "twitter"]) {
+        if (socialLinks[key] !== undefined) update[`socialLinks.${key}`] = socialLinks[key];
       }
     }
 
-    // username/email are unique — check first so we return a friendly error, not a crash
+    // username/email are unique-indexed — a blind update would crash with a
+    // duplicate-key error if someone else already has that value. Check first,
+    // and exclude the current user from the collision check.
     if (username) {
-      const u = String(username).trim().toLowerCase();
-      if (!/^[a-z0-9_]{3,20}$/.test(u)) return res.status(400).json({ error: "Username: 3–20 letters, numbers or underscores." });
-      const taken = await User.findOne({ username: u, _id: { $ne: req.userId } });
-      if (taken) return res.status(409).json({ error: "That username is taken." });
-      update.username = u;
+      const taken = await User.findOne({ username: username.toLowerCase(), _id: { $ne: req.userId } });
+      if (taken) return res.status(409).json({ error: "username already taken" });
+      update.username = username.toLowerCase();
     }
     if (email) {
-      const e = String(email).trim().toLowerCase();
-      if (!/^\S+@\S+\.\S+$/.test(e)) return res.status(400).json({ error: "That email doesn't look right." });
-      const taken = await User.findOne({ email: e, _id: { $ne: req.userId } });
-      if (taken) return res.status(409).json({ error: "That email is already used." });
-      update.email = e;
+      const taken = await User.findOne({ email: email.toLowerCase(), _id: { $ne: req.userId } });
+      if (taken) return res.status(409).json({ error: "email already taken" });
+      update.email = email.toLowerCase();
     }
 
-    const user = await User.findByIdAndUpdate(req.userId, update, { returnDocument: "after" });
+    const user = await User.findByIdAndUpdate(req.userId, update, { new: true });
     if (!user) return res.status(404).json({ error: "user not found" });
     res.json(safeUser(user));
   } catch (e) {
     console.error("settings update error:", e);
     res.status(500).json({ error: "server error" });
-  }
-});
-
-/* Profile photo. The browser shrinks it to a small square first; the server re-checks size and
-   that the bytes really are a JPEG/PNG/WebP, then stores it on the account (Render's disk is wiped
-   on every deploy, so files on disk would vanish — the database doesn't). */
-const AVATAR_MAX_BYTES = 200 * 1024;
-function looksLikeImage(buf, mime) {
-  if (mime === "image/jpeg") return buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff;
-  if (mime === "image/png")  return buf.length > 8 && buf.slice(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
-  if (mime === "image/webp") return buf.length > 12 && buf.slice(0, 4).toString() === "RIFF" && buf.slice(8, 12).toString() === "WEBP";
-  return false;
-}
-
-app.post("/api/user/avatar", auth, async (req, res) => {
-  try {
-    const m = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/.exec(String((req.body && req.body.image) || ""));
-    if (!m) return res.status(400).json({ error: "Use a JPG, PNG or WebP photo." });
-    const buf = Buffer.from(m[2], "base64");
-    if (buf.length > AVATAR_MAX_BYTES) return res.status(413).json({ error: "That photo is too large." });
-    if (!looksLikeImage(buf, m[1])) return res.status(400).json({ error: "That file isn't a valid image." });
-
-    const user = await User.findByIdAndUpdate(
-      req.userId,
-      { avatarData: buf, avatarType: m[1], avatar: `/api/avatar/${req.userId}?v=${Date.now()}` },
-      { returnDocument: "after" }
-    );
-    if (!user) return res.status(404).json({ error: "user not found" });
-    res.json(safeUser(user));
-  } catch (e) {
-    console.error("avatar upload error:", e.message);
-    res.status(500).json({ error: "server error" });
-  }
-});
-
-app.delete("/api/user/avatar", auth, async (req, res) => {
-  try {
-    const user = await User.findByIdAndUpdate(
-      req.userId,
-      { $set: { avatar: "", avatarType: "" }, $unset: { avatarData: 1 } },
-      { returnDocument: "after" }
-    );
-    if (!user) return res.status(404).json({ error: "user not found" });
-    res.json(safeUser(user));
-  } catch {
-    res.status(500).json({ error: "server error" });
-  }
-});
-
-// Public image — <img> tags can't send a login header, and profile photos are public anyway.
-// The ?v= in the saved URL changes on every upload, so browsers can cache it for a year.
-app.get("/api/avatar/:id", async (req, res) => {
-  try {
-    if (!mongoose.isValidObjectId(req.params.id)) return res.status(404).end();
-    const user = await User.findById(req.params.id).select("+avatarData avatarType");
-    if (!user || !user.avatarData || !user.avatarType) return res.status(404).end();
-    res.set({
-      "Content-Type": user.avatarType,
-      "Cache-Control": "public, max-age=31536000, immutable",
-      "Cross-Origin-Resource-Policy": "cross-origin",
-      "X-Content-Type-Options": "nosniff",
-    });
-    res.send(user.avatarData);
-  } catch {
-    res.status(404).end();
   }
 });
 
@@ -780,10 +542,7 @@ async function fetchCloudflareIce() {
   const data = await r.json();
   const list = Array.isArray(data.iceServers) ? data.iceServers : data.iceServers ? [data.iceServers] : [];
   if (!list.length) throw new Error("Cloudflare TURN API returned no iceServers");
-  // Port-53 TURN URLs are filtered/slow in browsers (Firefox especially) — drop them
-  return list
-    .map(sv => ({ ...sv, urls: [].concat(sv.urls).filter(u => !/:53(\?|$)/.test(u)) }))
-    .filter(sv => sv.urls.length);
+  return list;
 }
 
 // Any TURN provider that gives a fixed username/password (Metered, ExpressTURN, your own coturn...).
@@ -791,10 +550,9 @@ async function fetchCloudflareIce() {
 function staticTurnServers() {
   const { TURN_URLS, TURN_USERNAME, TURN_CREDENTIAL } = process.env;
   if (!TURN_URLS || !TURN_USERNAME || !TURN_CREDENTIAL) return null;
-  const strip = (v) => String(v).trim().replace(/^["']|["']$/g, "");
-  const urls = TURN_URLS.split(",").map(strip).filter(u => /^turns?:/i.test(u));
+  const urls = TURN_URLS.split(",").map(u => u.trim()).filter(u => /^turns?:/i.test(u));
   if (!urls.length) return null;
-  return [...STUN_ONLY, { urls, username: strip(TURN_USERNAME), credential: strip(TURN_CREDENTIAL) }];
+  return [...STUN_ONLY, { urls, username: TURN_USERNAME, credential: TURN_CREDENTIAL }];
 }
 
 function iceSource() {
@@ -818,15 +576,14 @@ app.get("/api/ice", auth, async (req, res) => {
     res.json({ iceServers: iceCache.servers, turn: true });
   } catch (e) {
     console.error("⚠️  TURN credential fetch failed:", e.message);   // never log the token
-    const fb = iceCache.servers || staticTurnServers();
-    res.json({ iceServers: fb || STUN_ONLY, turn: !!fb });
+    res.json({ iceServers: iceCache.servers || STUN_ONLY, turn: !!iceCache.servers });
   }
 });
 
 app.get("/api/leaderboard", async (req, res) => {
   try {
     const top = await User.find().sort({ points: -1 }).limit(50).lean();
-    res.json(top.map((u, i) => ({ ...publicUser(u), globalRank: i + 1 })));
+    res.json(top.map((u, i) => ({ ...safeUser(u), globalRank: i + 1 })));
   } catch {
     res.status(500).json({ error: "server error" });
   }
@@ -1073,52 +830,34 @@ io.on("connection", (socket) => {
     echo: 1, finishmystory: 1,
   };
 
-  socket.on("proposeGame", ({ roomId, game } = {}) => {
-    const room = roomFor(roomId);                       // only the two players
-    if (!room || typeof game !== "string" || game.length > 40) return;
-    room.proposal = { game, by: socket.id };
+  socket.on("proposeGame", ({ roomId, game }) => {
+    if (!rooms.has(roomId)) return;
     io.to(roomId).emit("gameProposed", { game, proposedBy: socket.id });
   });
 
-  socket.on("acceptGame", async ({ roomId, game } = {}) => {
-    const room = roomFor(roomId);
+  socket.on("acceptGame", async ({ roomId, game }) => {
+    const room = rooms.get(roomId);
     if (!room) return;
-    // Must answer an open proposal made by the OTHER player; a proposal can be accepted once
-    const prop = room.proposal;
-    if (!prop || prop.game !== game || prop.by === socket.id || room.charging) return;
-    room.charging = true;
-    room.proposal = null;
-
     const cost = GAME_COSTS[game] || 1;
+
     const players = [room.offerer, room.answerer].filter(p => p.userId);
-    const charged = [];
-    const refund = async () => {
-      for (const id of charged) await User.findByIdAndUpdate(id, { $inc: { coins: cost } }).catch(() => {});
-    };
-    try {
-      // Atomic, race-safe deduction: only succeeds if balance >= cost at update time
-      for (const p of players) {
-        const updated = await User.findOneAndUpdate(
-          { _id: p.userId, coins: { $gte: cost } },
-          { $inc: { coins: -cost } },
-          { returnDocument: "after" }
-        );
-        if (!updated) {
-          await refund();                               // give back whoever was already charged
-          io.to(roomId).emit("gameRejected", { game, reason: "not enough coins", userId: p.userId });
-          return;
-        }
-        charged.push(p.userId);
+    // Atomic, race-safe deduction: only succeeds if the balance is still
+    // >= cost at the moment of the update. Two simultaneous spends can't
+    // both succeed and push someone's coins negative.
+    for (const p of players) {
+      const updated = await User.findOneAndUpdate(
+        { _id: p.userId, coins: { $gte: cost } },
+        { $inc: { coins: -cost } },
+        { new: true }
+      );
+      if (!updated) {
+        io.to(roomId).emit("gameRejected", { game, reason: "not enough coins", userId: p.userId });
+        return;
       }
-      room.gameMode = game;
-      io.to(roomId).emit("gameStarted", { game, cost });
-    } catch (e) {
-      console.error("acceptGame error:", e.message);
-      await refund();
-      io.to(roomId).emit("gameRejected", { game, reason: "server error" });
-    } finally {
-      room.charging = false;
     }
+
+    room.gameMode = game;
+    io.to(roomId).emit("gameStarted", { game, cost });
   });
 
   /* ─── WEBRTC SIGNALING ──────────────────────────────────────
@@ -1207,46 +946,47 @@ io.on("connection", (socket) => {
   /* ─── IN-MATCH EVENTS ───────────────────────────────────────*/
 
   // Crowd reaction — broadcast to everyone in the room
-  socket.on("reaction", ({ roomId, emoji } = {}) => {
-    if (!roomFor(roomId) || typeof emoji !== "string" || emoji.length > 16) return;
+  socket.on("reaction", ({ roomId, emoji }) => {
     socket.to(roomId).emit("reaction", { emoji, fromId: socket.id });
   });
 
   // Round started — both players sync
-  socket.on("round:start", ({ roomId, round, mode } = {}) => {
-    if (!roomFor(roomId)) return;
+  socket.on("round:start", ({ roomId, round, mode }) => {
     socket.to(roomId).emit("round:start", { round, mode });
   });
 
   // Round ended — relay result to opponent
-  socket.on("round:end", ({ roomId, round, result } = {}) => {
-    if (!roomFor(roomId)) return;
+  socket.on("round:end", ({ roomId, round, result }) => {
     socket.to(roomId).emit("round:end", { round, result });
   });
 
   // Match finished — save to DB and update points
-  socket.on("match:end", async ({ roomId, won, gameMode } = {}) => {
-    const room = roomFor(roomId);                       // only the two players of this room
-    if (!room || room.ended) return;                    // and only once per room
-    room.ended = true;
-
-    const entryFee = room.entryFee;                     // decided by the server at match time — never trust the client's number
-    const mode = typeof gameMode === "string" ? gameMode.slice(0, 40) : room.gameMode;
-    const myInfo  = room.offerer.socketId === socket.id ? room.offerer  : room.answerer;
-    const oppInfo = room.offerer.socketId === socket.id ? room.answerer : room.offerer;
+  socket.on("match:end", async ({ roomId, won, entryFee, gameMode }) => {
+    const room = rooms.get(roomId);
+    if (!room) return;
 
     // Only update DB if both players are authenticated
-    if (myInfo.userId && oppInfo.userId && Number.isFinite(entryFee)) {
+    const myInfo    = room.offerer.socketId   === socket.id ? room.offerer   : room.answerer;
+    const oppInfo   = room.offerer.socketId   === socket.id ? room.answerer  : room.offerer;
+
+    if (myInfo.userId && oppInfo.userId) {
       try {
-        const winner = won === true ? myInfo : oppInfo;
-        const loser  = won === true ? oppInfo : myInfo;
-        await User.findByIdAndUpdate(winner.userId, { $inc: { points:  entryFee, wins: 1, gamesPlayed: 1 } });
-        await User.findByIdAndUpdate(loser.userId,  { $inc: { points: -entryFee,          gamesPlayed: 1 } });
+        // Winner gets entryFee * 2 points, loser loses entryFee
+        const [winInc, loseInc] = [entryFee, -entryFee];
+        if (won) {
+          await User.findByIdAndUpdate(myInfo.userId,  { $inc: { points: winInc,  wins: 1, gamesPlayed: 1 } });
+          await User.findByIdAndUpdate(oppInfo.userId, { $inc: { points: loseInc, gamesPlayed: 1 } });
+        } else {
+          await User.findByIdAndUpdate(myInfo.userId,  { $inc: { points: loseInc, gamesPlayed: 1 } });
+          await User.findByIdAndUpdate(oppInfo.userId, { $inc: { points: winInc,  wins: 1, gamesPlayed: 1 } });
+        }
+
+        // Save match record
         await Match.create({
           player1: myInfo.userId,
           player2: oppInfo.userId,
-          winner:  winner.userId,
-          gameMode: mode,
+          winner: won ? myInfo.userId : oppInfo.userId,
+          gameMode,
           entryFee,
         });
       } catch (e) {
@@ -1258,10 +998,20 @@ io.on("connection", (socket) => {
   });
 
   // Player leaves mid-match — tell opponent
+  /*
+    NEXT / End call. Only a member of a live room can end it, so a late or
+    malicious "match:leave" for an old/foreign room is ignored (before, a stale
+    NEXT could end someone's brand-new call). Both sockets also leave the
+    Socket.IO room so no later message can reach them through it.
+  */
   socket.on("match:leave", ({ roomId } = {}) => {
-    if (!roomFor(roomId)) return;                       // can't kill someone else's room
-    socket.to(roomId).emit("opponent:left");
+    const room = roomFor(roomId);
+    if (!room) return;
+    const otherId = otherSide(room);
+    io.to(otherId).emit("opponent:left", { roomId });
     socket.leave(roomId);
+    const other = io.sockets.sockets.get(otherId);
+    if (other) other.leave(roomId);
     rooms.delete(roomId);
   });
 
@@ -1282,8 +1032,12 @@ io.on("connection", (socket) => {
     // Find any active room and tell the opponent
     for (const [roomId, room] of rooms.entries()) {
       if (room.offerer.socketId === socket.id || room.answerer.socketId === socket.id) {
-        socket.to(roomId).emit("opponent:left");
+        const otherId = room.offerer.socketId === socket.id ? room.answerer.socketId : room.offerer.socketId;
+        io.to(otherId).emit("opponent:left", { roomId });
+        const other = io.sockets.sockets.get(otherId);
+        if (other) other.leave(roomId);
         rooms.delete(roomId);
+        break;
       }
     }
 

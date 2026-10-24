@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { socket, reconnectSocket } from "../socket";
 import { createPeer, parseIceServers, DEFAULT_ICE } from "../peer";
+import AppShell from "./AppShell";
+import Home from "./Home";
 import Profile from "./Profile";
 import LoginSignup from "./LoginSignup";
 import Rewards from "./Rewards";
@@ -562,6 +564,7 @@ function useWebRTC() {
   function closePeer() {
     reportTimers.current.forEach(clearTimeout);
     reportTimers.current = [];
+    roomIdRef.current = null;
     if (peerRef.current) { peerRef.current.close(); peerRef.current = null; }
     setHaveRemote(false);
     setRemoteBlocked(false);
@@ -617,6 +620,7 @@ function useWebRTC() {
 
   return {
     localRef, remoteRef, remoteStreamRef, attachRemote, unmuteRemote, remoteBlocked, getDiagnostics,
+    getRoomId: () => roomIdRef.current,
     stream, remoteConnected, callState,
     camErr, muted, camOff,
     startCamera, stopCamera, toggleMute, toggleCam, loadIceServers,
@@ -644,7 +648,7 @@ function WatchLivePage({ onNavigate, liveCount }) {
   }, []);
 
   return (
-    <div style={{ position: "relative", zIndex: 1, paddingTop: 80, minHeight: "100vh" }}>
+    <div style={{ position: "relative", zIndex: 1, paddingTop: 0, minHeight: "auto" }}>
       <div style={{ padding: "0 clamp(16px,4vw,60px)", maxWidth: 1100, margin: "0 auto" }}>
 
         {/* Header */}
@@ -783,7 +787,7 @@ function GoLivePage({ user, onNavigate, webrtc }) {
 
   if (!user) {
     return (
-      <div style={{ position: "relative", zIndex: 1, paddingTop: 80, minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ position: "relative", zIndex: 1, paddingTop: 0, minHeight: "auto", display: "flex", alignItems: "center", justifyContent: "center" }}>
         <div className="sp-card" style={{ padding: "40px 48px", textAlign: "center", maxWidth: 360 }}>
           <div style={{ fontSize: 40, marginBottom: 20 }}>📡</div>
           <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 22, marginBottom: 10 }}>Sign in to go live</div>
@@ -797,7 +801,7 @@ function GoLivePage({ user, onNavigate, webrtc }) {
   }
 
   return (
-    <div style={{ position: "relative", zIndex: 1, paddingTop: 80, minHeight: "100vh" }}>
+    <div style={{ position: "relative", zIndex: 1, paddingTop: 0, minHeight: "auto" }}>
       <div style={{ padding: "0 clamp(16px,4vw,48px)", maxWidth: 800, margin: "0 auto", paddingBottom: 100 }}>
 
         <div className="sp-up" style={{ marginBottom: 32 }}>
@@ -939,6 +943,30 @@ function GoLivePage({ user, onNavigate, webrtc }) {
 /* ══════════════════════════════════════════════════════
    MAIN APP
 ══════════════════════════════════════════════════════ */
+const HOME_GAMES = [
+  { emoji: "🔊", title: "Echo",           desc: "Make any sound — clap, hum, a made-up word. Your stranger has 2 seconds to echo it back. Crowd judges the match.", pts: 18, color: DS.signal },
+  { emoji: "😐", title: "Don't Laugh",    desc: "Keep a straight face while your stranger loses it.",    pts: 10, color: DS.ice },
+  { emoji: "🪞", title: "Mirror Me",      desc: "Copy poses and expressions. AI scores the match.",       pts: 8,  color: DS.live },
+  { emoji: "🎭", title: "Vibe Check",     desc: "Act a mood — grandma, demon, robot. Crowd votes.",       pts: 12, color: DS.gold },
+  { emoji: "🌶️", title: "Hot Take",      desc: "Wild opinion. Five seconds to react. Crowd judges.",     pts: 6,  color: "#a064ff" },
+  { emoji: "📖", title: "Finish My Story",desc: "One starts a story. The other ends it live.",            pts: 15, color: "#ff9f43" },
+];
+
+/* "Coming soon" placeholder page (used for Messages — the server has no messaging yet). */
+function ComingSoon({ title, text, onHome }) {
+  return (
+    <div style={{ maxWidth: 560, margin: "6vh auto 0", textAlign: "center", padding: "40px 28px", border: `1px solid ${DS.rim}`, borderRadius: 24, background: DS.surface }}>
+      <div style={{ width: 64, height: 64, margin: "0 auto 20px", borderRadius: 18, display: "grid", placeItems: "center", background: `color-mix(in srgb, ${DS.signal} 14%, transparent)`, color: DS.signal }}>
+        <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-4.6A8 8 0 1 1 21 12z" /></svg>
+      </div>
+      <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, letterSpacing: 3, color: DS.signal, textTransform: "uppercase", marginBottom: 10 }}>coming soon</div>
+      <h2 style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 28, letterSpacing: -0.5, margin: "0 0 10px" }}>{title}</h2>
+      <p style={{ color: DS.ash, fontSize: 15, lineHeight: 1.6, margin: "0 0 24px" }}>{text}</p>
+      <button className="sp-btn-primary" style={{ padding: "12px 28px" }} onClick={onHome}>Back to home</button>
+    </div>
+  );
+}
+
 export default function StrangerPlay() {
   const [page, setPage] = useState("home");
 
@@ -1012,6 +1040,9 @@ export default function StrangerPlay() {
   const [matchInfo,    setMatchInfo]    = useState(null);
   const [queueTime,    setQueueTime]    = useState(0);
   const [opponentLeft, setOpponentLeft] = useState(false);
+  // Latest page/phase for callbacks registered once (socket handlers would otherwise see stale values)
+  const liveRef = useRef({ page: "home", matchPhase: "idle" });
+  const [profileName, setProfileName] = useState(null);   // null = my own profile, else the player that was searched
   const [proposedGame, setProposedGame] = useState(null);  // game the other side proposed
   const [gameAccepted, setGameAccepted] = useState(false); // both accepted → open GameScreen
   const queueTimerRef  = useRef(null);
@@ -1055,9 +1086,18 @@ export default function StrangerPlay() {
       peerCleanupRef.current = webrtc.setupPeerConnection(info.roomId, info.role);
     });
 
-    socket.on("opponent:left", () => {
+    socket.on("opponent:left", (data) => {
+      // A "left" message for a room that is not my current call is stale — ignore it.
+      if (data && data.roomId && data.roomId !== webrtc.getRoomId()) return;
       setOpponentLeft(true);
       webrtc.closePeer();
+      // The stranger pressed NEXT (or dropped). Show "Stranger left" briefly,
+      // then put this person back in the queue so they are not stuck waiting.
+      // (Not during a game: GameScreen handles that case itself.)
+      setTimeout(() => {
+        const live = liveRef.current;
+        if (live.page === "play" && live.matchPhase === "connected") startSearch();
+      }, 1500);
     });
 
     // Other player tapped a game pill — show accept toast
@@ -1097,6 +1137,7 @@ export default function StrangerPlay() {
   }, []);
 
   const webrtc = useWebRTC();
+  liveRef.current = { page, matchPhase };
   useEffect(() => {
     // Start camera only on play/golive pages
     if (page === "play" || (page === "home" && homeMode === "golive")) webrtc.startCamera();
@@ -1126,30 +1167,37 @@ export default function StrangerPlay() {
 
   const startSearch = async () => {
     if (!localStorage.getItem("tz_token")) {
+      setMatchPhase("idle");
       setQueueErr("Log in to play.");
       return;
     }
     if (!socket.connected) {
+      setMatchPhase("idle");
       setQueueErr("Not connected to the server yet. Try again in a few seconds.");
       return;
     }
-    // The call needs camera + mic. Get them BEFORE queueing — a match with no
-    // local tracks produces a call that can never show video.
-    if (!(await webrtc.startCamera())) {
-      setQueueErr("Camera and microphone are required to play. Allow access, then try again.");
-      return;
-    }
-    await webrtc.loadIceServers();   // relay credentials ready before a match can happen
-    setQueueErr("");
+    // Show the searching screen right away. (After NEXT, the old call's "connecting"
+    // spinner used to stay up while the camera / relay checks below ran.)
+    clearInterval(queueTimerRef.current);
     setMatchPhase("searching");
     setQueueTime(0);
     setOpponentLeft(false);
     setProposedGame(null);
     setGameAccepted(false);
     setPage("play");
+    // The call needs camera + mic. Get them BEFORE queueing — a match with no
+    // local tracks produces a call that can never show video.
+    if (!(await webrtc.startCamera())) {
+      setMatchPhase("idle");
+      setQueueErr("Camera and microphone are required to play. Allow access, then try again.");
+      return;
+    }
+    await webrtc.loadIceServers();   // relay credentials ready before a match can happen
+    // The person may have cancelled while we were waiting for the camera / relay.
+    if (liveRef.current.matchPhase !== "searching") return;
+    setQueueErr("");
     // gameMode: null — players match on availability, choose game AFTER connecting
     socket.emit("queue:join", { gameMode: null });
-    clearInterval(queueTimerRef.current);
     queueTimerRef.current = setInterval(() => setQueueTime(t => t + 1), 1000);
   };
 
@@ -1161,6 +1209,14 @@ export default function StrangerPlay() {
   };
 
   const [menuOpen, setMenuOpen] = useState(false);
+
+  // ── App frame wiring: AppShell talks in "nav keys", the app's pages have their own names ──
+  const PAGE_OF_NAV = { home: "home", match: "play", live: "watchlive", golive: "golive", messages: "messages", rewards: "rewards", ranking: "ranks", profile: "profile", settings: "settings" };
+  const NAV_OF_PAGE = { home: "home", play: "match", gamescreen: "match", watchlive: "live", golive: "live", messages: "messages", rewards: "rewards", ranks: "ranking", profile: "profile", settings: "profile" };
+  const navTo = (key) => { if (key === "profile") setProfileName(null); goTo(PAGE_OF_NAV[key] || key); };
+  const searchPlayer = (name) => { setProfileName(name); goTo("profile"); };
+  // The live call, games and the login page take the whole screen (no sidebar / top bar).
+  const bareFrame = (page === "play" && matchPhase === "connected") || page === "gamescreen" || page === "login";
 
   const getDiag = async () => ({
     app: { page, matchPhase, socketConnected: socket.connected, loggedIn: !!localStorage.getItem("tz_token"), queueErr: queueErr || null,
@@ -1175,341 +1231,30 @@ export default function StrangerPlay() {
       <ScanLine />
       <AmbientGrid />
 
-      {/* ══════════════════════════════
-          TOP NAV — redesigned
-      ══════════════════════════════ */}
-      <nav style={{
-        position: "fixed", top: 0, left: 0, right: 0, zIndex: 300,
-        height: 60,
-        display: "flex", alignItems: "center", justifyContent: "space-between",
-        padding: "0 clamp(16px,3vw,40px)",
-        background: DS.void + "ee",
-        backdropFilter: "blur(20px)",
-        borderBottom: `1px solid ${DS.rim}`,
-      }}>
-        {/* Logo */}
-        <div
-          onClick={() => goTo("home")}
-          style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", flexShrink: 0 }}
-        >
-          <img
-            src="/logo.svg"
-            alt="Tranzle"
-            style={{ width: 26, height: 26, borderRadius: 14, objectFit: "cover", display: "block" }}
-          />
-          <span style={{
-            fontFamily: "'Space Grotesk', sans-serif",
-            fontWeight: 700, fontSize: 17, letterSpacing: 0.3,
-            color: DS.plat,
-          }}>Tranzle</span>
-        </div>
-
-        {/* Desktop right section */}
-        <div className="hide-mobile" style={{ alignItems: "center", gap: 10 }}>
-          {/* Live count */}
-          <span className="sp-live-badge">
-            <span className="sp-live-dot" />
-            {liveCount > 0 ? liveCount.toLocaleString() : "—"}
-          </span>
-
-          {/* Points pill — shown only when logged in */}
-          {user && (
-            <span style={{
-              background: DS.gold + "12",
-              border: `1px solid ${DS.gold}33`,
-              borderRadius: 14, padding: "4px 10px",
-              fontFamily: "'JetBrains Mono', monospace",
-              fontSize: 12, color: DS.gold,
-            }}>
-              {points} pts
-            </span>
-          )}
-
-          {/* Coins — separate currency from points. Points = skill score from
-              winning matches. Coins = spendable, bought with real money,
-              used as entry fee for games. Click opens the purchase flow. */}
-          {user && (
-            <button
-              onClick={buyCoins}
-              className="sp-btn-ghost"
-              style={{ padding: "4px 10px", fontSize: 12, fontFamily: "'JetBrains Mono', monospace", color: DS.signal, borderColor: DS.signal + "33" }}
-              title="Buy more coins"
-            >
-              🪙 {user.coins ?? 0}
-            </button>
-          )}
-
-          {/* Theme toggle — quick access here, full switch also lives in Settings */}
-          <button
-            onClick={toggleTheme}
-            aria-label="Toggle dark/light mode"
-            title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-            className="sp-btn-ghost"
-            style={{ width: 34, height: 34, padding: 0, fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 10 }}
-          >
-            {theme === "dark" ? "☀️" : "🌙"}
-          </button>
-
-          {/* BUG FIX #2: Login button hidden after login. Per latest review:
-              no separate Play button here anymore, and a logged-in user sees
-              ONLY a single profile avatar — no username text, no inline logout.
-              Sign-out lives in Settings now, not duplicated in the header. */}
-          {!user ? (
-            <button className="sp-btn-ghost" style={{ padding: "7px 16px" }} onClick={() => goTo("login")}>
-              Sign in
-            </button>
-          ) : (
-            <button
-              onClick={() => goTo("profile")}
-              aria-label="Profile"
-              style={{
-                width: 34, height: 34, borderRadius: "50%",
-                background: DS.surface, border: `1px solid ${DS.rim}`,
-                display: "flex", alignItems: "center", justifyContent: "center",
-                cursor: "pointer", fontSize: 15, padding: 0,
-                transition: "border-color 0.15s",
-              }}
-              onMouseEnter={e => e.currentTarget.style.borderColor = DS.signal + "66"}
-              onMouseLeave={e => e.currentTarget.style.borderColor = DS.rim}
-            >
-              🧑‍💻
-            </button>
-          )}
-        </div>
-
-        {/* Mobile right */}
-        <div className="show-mobile" style={{ alignItems: "center", gap: 10 }}>
-          {user && (
-            <span style={{
-              fontFamily: "'JetBrains Mono', monospace", fontSize: 11,
-              color: DS.gold, background: DS.gold + "12",
-              border: `1px solid ${DS.gold}22`, borderRadius: 14, padding: "3px 8px",
-            }}>{points}pts</span>
-          )}
-          <button
-            onClick={() => setMenuOpen(m => !m)}
-            style={{ background: "none", border: "none", color: DS.plat, fontSize: 20, cursor: "pointer", padding: 4 }}
-          >
-            {menuOpen ? "✕" : "☰"}
-          </button>
-        </div>
-      </nav>
-
-      {/* Mobile menu */}
-      {menuOpen && (
-        <div style={{
-          position: "fixed", top: 60, left: 0, right: 0, zIndex: 299,
-          background: DS.void + "f8", backdropFilter: "blur(24px)",
-          borderBottom: `1px solid ${DS.rim}`,
-          padding: "16px 20px 28px",
-          animation: "sp-in 0.22s both",
-          display: "flex", flexDirection: "column", gap: 2,
-        }}>
-          {[["🎁", "Rewards", "rewards"], ["⚙️", "Settings", "settings"], ["👤", "Profile", "profile"]].map(([icon, label, id]) => (
-            <button key={id} onClick={() => { goTo(id); setMenuOpen(false); }} style={{
-              background: "none", border: "none", borderRadius: 10, padding: "12px 16px",
-              color: DS.ash, fontFamily: "'Inter', sans-serif", fontWeight: 500, fontSize: 15,
-              cursor: "pointer", textAlign: "left",
-            }}>{icon} {label}</button>
-          ))}
-          <div style={{ height: 1, background: DS.rim, margin: "8px 0" }} />
-
-          {/* BUG FIX #2 mobile: hide login if already logged in */}
-          {!user && (
-            <button className="sp-btn-ghost" style={{ padding: "12px 16px", textAlign: "left", borderRadius: 10 }}
-              onClick={() => { goTo("login"); setMenuOpen(false); }}>
-              Sign in / Sign up
-            </button>
-          )}
-          {user && (
-            <button className="sp-btn-ghost" style={{ padding: "12px 16px", textAlign: "left", borderRadius: 10, color: DS.live, borderColor: DS.live + "33" }}
-              onClick={() => { handleLogout(); setMenuOpen(false); }}>
-              Sign out
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* ══════════════════════════════
-          HOME PAGE — redesigned
-          Two modes: Watch Live / Play / Go Live
-      ══════════════════════════════ */}
+      <AppShell
+        user={user}
+        page={NAV_OF_PAGE[page]}
+        onNavigate={navTo}
+        onSearch={searchPlayer}
+        onLogin={() => goTo("login")}
+        onLogout={handleLogout}
+        online={liveCount}
+        points={points}
+        onBuyCoins={buyCoins}
+        theme={theme}
+        onToggleTheme={toggleTheme}
+        bare={bareFrame}
+      >
       {page === "home" && (
-        <div style={{ position: "relative", zIndex: 1 }}>
-
-          {/* ── LIVE TICKER (top, below nav) ── */}
-          <div className="sp-ticker-wrap" style={{ marginTop: 60 }}>
-            <div className="sp-ticker-inner">
-              shadow_x vs foxgirl99 — Don't Laugh — 80pts at stake &nbsp;◆&nbsp;
-              dragonz vs raj_np — Vibe Check — 30pts &nbsp;◆&nbsp;
-              3 new players just joined &nbsp;◆&nbsp;
-              hotboi_br won 120pts in Speed Roast &nbsp;◆&nbsp;
-              luna_mx connected from Mexico 🇲🇽 &nbsp;◆&nbsp;
-              {liveCount > 0 ? `${liveCount.toLocaleString()} online now` : "server warming up..."} &nbsp;◆&nbsp;
-            </div>
-          </div>
-
-          {/* ── HERO ── */}
-          <section style={{
-            minHeight: "90vh",
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            justifyContent: "center",
-            textAlign: "center",
-            padding: "clamp(60px,10vw,100px) clamp(20px,6vw,80px)",
-            position: "relative",
-          }}>
-            {/* Tag line */}
-            <div className="sp-up" style={{
-              animationDelay: "0.1s",
-              fontFamily: "'JetBrains Mono', monospace",
-              fontSize: 11, color: DS.ash, letterSpacing: 3,
-              marginBottom: 28, textTransform: "uppercase",
-              display: "flex", alignItems: "center", gap: 12,
-            }}>
-              <span style={{ width: 20, height: 1, background: DS.rim, display: "inline-block" }} />
-              random video calls. real stakes.
-              <span style={{ width: 20, height: 1, background: DS.rim, display: "inline-block" }} />
-            </div>
-
-            {/* Hero title — brutalist, tight */}
-            <h1
-              className="hero-title sp-up"
-              style={{
-                animationDelay: "0.2s",
-                fontFamily: "'Space Grotesk', sans-serif",
-                fontWeight: 700,
-                fontSize: "clamp(64px,14vw,160px)",
-                lineHeight: 0.88,
-                letterSpacing: -3,
-                marginBottom: 32,
-              }}
-            >
-              CALL A<br />
-              <Signal>STRANGER.</Signal><br />
-              WIN.
-            </h1>
-
-            <p className="sp-up" style={{
-              animationDelay: "0.35s",
-              fontSize: "clamp(14px,2vw,16px)",
-              color: DS.ash,
-              maxWidth: 400,
-              lineHeight: 1.8,
-              marginBottom: 44,
-            }}>
-              Two strangers. Live camera. A game. Crowd watching.<br />
-              No followers. No algorithm. Just you.
-            </p>
-
-            {/* ── MODE SWITCHER ── The two-mode system */}
-            <div className="sp-up" style={{ animationDelay: "0.45s", marginBottom: 32 }}>
-              <div className="sp-mode-rail">
-                <button
-                  className={`sp-mode-btn ${homeMode === "watch" ? "on" : "off"}`}
-                  onClick={() => setHomeMode("watch")}
-                >
-                  👁 Watch Live
-                </button>
-                <button
-                  className={`sp-mode-btn ${homeMode === "play" ? "on" : "off"}`}
-                  onClick={() => setHomeMode("play")}
-                >
-                  ⚔️ Play
-                </button>
-                <button
-                  className={`sp-mode-btn ${homeMode === "golive" ? "on" : "off"}`}
-                  onClick={() => setHomeMode("golive")}
-                >
-                  📡 Go Live
-                </button>
-              </div>
-            </div>
-
-            {/* CTA changes based on mode */}
-            <div className="sp-up" style={{ animationDelay: "0.5s", display: "flex", gap: 12, flexWrap: "wrap", justifyContent: "center" }}>
-              {homeMode === "watch" && (
-                <button className="sp-btn-primary" style={{ padding: "14px 36px", fontSize: 15 }} onClick={() => goTo("watchlive")}>
-                  Browse live matches →
-                </button>
-              )}
-              {homeMode === "play" && (
-                <button className="sp-btn-primary" style={{ padding: "14px 36px", fontSize: 15 }} onClick={() => startSearch()}>
-                  ▶ Find a stranger
-                </button>
-              )}
-              {homeMode === "golive" && (
-                <button className="sp-btn-primary" style={{ padding: "14px 36px", fontSize: 15 }} onClick={() => goTo("golive")}>
-                  📡 Set up stream →
-                </button>
-              )}
-            </div>
-
-            {/* Stats row */}
-            <div className="sp-up" style={{
-              animationDelay: "0.65s",
-              display: "flex", alignItems: "center", gap: "clamp(20px,4vw,48px)",
-              marginTop: 64, flexWrap: "wrap", justifyContent: "center",
-            }}>
-              {[
-                { label: "online now",     value: liveCount > 0 ? liveCount : 2847,  color: DS.signal },
-                { label: "games played",   value: 148920,                              color: DS.ice    },
-                { label: "countries",      value: 94,                                  color: DS.gold   },
-                { label: "points given",   value: 982400,                              color: DS.live   },
-              ].map((s, i) => (
-                <div key={s.label} style={{ textAlign: "center" }}>
-                  <div style={{
-                    fontFamily: "'JetBrains Mono', monospace",
-                    fontSize: "clamp(20px,3.5vw,30px)",
-                    fontWeight: 600,
-                    color: s.color,
-                    marginBottom: 4,
-                  }}>
-                    <AnimCount value={s.value} color={s.color} />
-                  </div>
-                  <div style={{ fontSize: 11, color: DS.ash, letterSpacing: 1.5, textTransform: "uppercase" }}>
-                    {s.label}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          {/* ── GAMES GRID ── */}
-          <section style={{ padding: "clamp(40px,6vw,80px) clamp(20px,5vw,60px) 120px", position: "relative" }}>
-            <div style={{ maxWidth: 1100, margin: "0 auto" }}>
-              <div style={{ marginBottom: 36 }}>
-                <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: DS.ash, letterSpacing: 4, marginBottom: 12, textTransform: "uppercase" }}>
-                  // six ways to embarrass a stranger
-                </div>
-                <h2 style={{
-                  fontFamily: "'Space Grotesk', sans-serif",
-                  fontWeight: 700,
-                  fontSize: "clamp(30px,5vw,48px)",
-                  letterSpacing: -0.5,
-                  lineHeight: 1,
-                }}>Pick a <Signal>game.</Signal></h2>
-              </div>
-
-              <div className="games-list" style={{ display: "flex", flexDirection: "column" }}>
-                {[
-                  { emoji: "🔊", title: "Echo",           desc: "Make any sound — clap, hum, a made-up word. Your stranger has 2 seconds to echo it back. Crowd judges the match.", pts: 18, color: DS.signal, delay: 0    },
-                  { emoji: "😐", title: "Don't Laugh",    desc: "Keep a straight face while your stranger loses it.",    pts: 10, color: DS.ice,    delay: 0.05 },
-                  { emoji: "🪞", title: "Mirror Me",      desc: "Copy poses and expressions. AI scores the match.",       pts: 8,  color: DS.live,   delay: 0.10 },
-                  { emoji: "🎭", title: "Vibe Check",     desc: "Act a mood — grandma, demon, robot. Crowd votes.",       pts: 12, color: DS.gold,   delay: 0.15 },
-                  { emoji: "🌶️", title: "Hot Take",      desc: "Wild opinion. Five seconds to react. Crowd judges.",     pts: 6,  color: "#a064ff", delay: 0.20 },
-                  { emoji: "📖", title: "Finish My Story",desc: "One starts a story. The other ends it live.",            pts: 15, color: "#ff9f43", delay: 0.25 },
-                ].map((g, i) => (
-                  <GameCard key={g.title} {...g} index={i} onClick={() => goTo("play")} />
-                ))}
-              </div>
-              <div style={{ marginTop: 18, fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: DS.ghost }}>
-                games unlock after you connect — nobody picks before they've said hi
-              </div>
-            </div>
-          </section>
-        </div>
+        <Home
+          user={user}
+          points={points}
+          online={liveCount}
+          games={HOME_GAMES}
+          onPlay={() => startSearch()}
+          onLogin={() => goTo("login")}
+          onNavigate={navTo}
+        />
       )}
 
       {/* ══════════════════════════════
@@ -1530,7 +1275,9 @@ export default function StrangerPlay() {
           PLAY — matchmaking + live call
       ══════════════════════════════ */}
       {page === "play" && (
-        <div style={{ position: "fixed", inset: 0, zIndex: 10, background: "#000" }}>
+        <div style={matchPhase === "connected"
+          ? { position: "fixed", inset: 0, zIndex: 10, background: "#000" }
+          : { position: "relative", height: "min(780px, calc(100dvh - 150px))", minHeight: 520, maxWidth: 980, margin: "0 auto", overflow: "auto", border: `1px solid ${DS.rim}`, borderRadius: 24, background: DS.void }}>
 
           {/* ── IDLE ── */}
           {matchPhase === "idle" && (
@@ -1956,7 +1703,7 @@ export default function StrangerPlay() {
           RANKS / LEADERBOARD
       ══════════════════════════════ */}
       {page === "ranks" && (
-        <div style={{ position: "relative", zIndex: 1, padding: "clamp(80px,12vw,100px) clamp(16px,5vw,60px) 120px", maxWidth: 860, margin: "0 auto" }}>
+        <div style={{ position: "relative", zIndex: 1, padding: "0 0 40px", maxWidth: 860, margin: "0 auto" }}>
           <div style={{ marginBottom: 36 }}>
             <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: DS.ash, letterSpacing: 4, marginBottom: 12, textTransform: "uppercase" }}>
               // who's winning rn
@@ -1991,19 +1738,22 @@ export default function StrangerPlay() {
         <LoginSignup onNavigate={goTo} onLogin={handleLogin} />
       )}
 
+      {/* BUG FIX #3: user and points now passed to Profile */}
       {page === "profile" && (
         <Profile
-          username={user?.username}
+          username={profileName || user?.username}
           me={user}
           token={localStorage.getItem("tz_token")}
           onUserUpdate={handleLogin}
           onPlay={() => goTo("play")}
           onLogout={handleLogout}
+          onNavigate={goTo} user={user} points={points}
         />
       )}
 
       {page === "rewards"  && <Rewards  onNavigate={goTo} />}
-      {page === "settings" && <Settings onNavigate={goTo} user={user} onUserUpdate={handleLogin} theme={theme} onToggleTheme={toggleTheme} />}
+      {page === "settings" && <Settings onNavigate={navTo} user={user} token={localStorage.getItem("tz_token")} onLogout={handleLogout} onUserUpdate={handleLogin} theme={theme} onToggleTheme={toggleTheme} />}
+      {page === "messages" && <ComingSoon title="Messages are on the way" text="Soon you will be able to keep chatting with people you met on a call, even after it ends." onHome={() => goTo("home")} />}
 
       {/* GameScreen — only renders on real match */}
       {page === "gamescreen" && matchPhase === "connected" && matchInfo ? (
@@ -2035,47 +1785,7 @@ export default function StrangerPlay() {
         </div>
       ) : null}
 
-      {/* ══════════════════════════════
-          BOTTOM NAV — main pages only.
-          HIDDEN during active calls (matchPhase === "connected") — the call UI
-          takes the full screen and the controls live inside the bottom half.
-          Showing the nav during a call would bury the NEXT button behind it.
-      ══════════════════════════════ */}
-      {["home", "play", "ranks", "watchlive", "golive"].includes(page) && !(page === "play" && matchPhase === "connected") && (
-        <nav style={{
-          position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 300,
-          display: "flex", justifyContent: "space-around", alignItems: "center",
-          padding: "12px 8px max(16px, env(safe-area-inset-bottom))",
-          background: DS.void + "ee",
-          backdropFilter: "blur(20px)",
-          borderTop: `1px solid ${DS.rim}`,
-        }}>
-          {[
-            ["Home", "home"],
-            ["Play", "play"],
-            ["Rank", "ranks"],
-            ["Watch", "watchlive"],
-          ].map(([label, id]) => {
-            const active = page === id;
-            return (
-              <div key={id} className={`sp-nav-item${active ? " active" : ""}`} onClick={() => goTo(id)} style={{
-                display: "flex", flexDirection: "column", alignItems: "center",
-                cursor: "pointer",
-                color: active ? DS.signal : DS.ash,
-                fontFamily: "'Space Grotesk', sans-serif",
-                fontStyle: active ? "italic" : "normal",
-                fontWeight: 600,
-                fontSize: 13,
-                padding: "4px 18px",
-                transition: "color 0.2s",
-                minWidth: 56,
-              }}>
-                {label}
-              </div>
-            );
-          })}
-        </nav>
-      )}
+      </AppShell>
     </div>
   );
 }
