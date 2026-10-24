@@ -8,6 +8,7 @@ import LoginSignup from "./LoginSignup";
 import Rewards from "./Rewards";
 import Settings from "./Settings";
 import GameScreen from "./GameScreen";
+import { tint } from "./theme";
 
 /* ─────────────────────────────────────────────────────────────
    DESIGN SYSTEM — StrangerPlay
@@ -228,7 +229,6 @@ const GLOBAL_CSS = `
     .show-mobile { display: flex !important; }
     .games-grid  { grid-template-columns: 1fr 1fr !important; }
     .hero-title  { font-size: clamp(42px,12vw,80px) !important; }
-    .lb-wins     { display: none !important; }
   }
   @media (max-width: 480px) {
     .games-grid  { grid-template-columns: 1fr !important; }
@@ -343,17 +343,17 @@ function LBRow({ rank, name, flag, pts, wins, isMe, delay }) {
     <div className="sp-up" style={{
       animationDelay: `${delay}s`,
       display: "grid",
-      gridTemplateColumns: "48px 1fr 100px 72px",
+      gridTemplateColumns: "clamp(34px,9vw,48px) minmax(0,1fr) clamp(62px,19vw,100px) clamp(40px,12vw,72px)",
       alignItems: "center",
       padding: "12px 20px",
       borderBottom: `1px solid ${DS.rim}`,
-      background: isMe ? DS.signal + "08" : "transparent",
+      background: isMe ? tint(DS.signal,"08") : "transparent",
       borderLeft: `2px solid ${isMe ? DS.signal : "transparent"}`,
       transition: "background 0.15s",
       cursor: "pointer",
     }}
-      onMouseEnter={e => e.currentTarget.style.background = isMe ? DS.signal + "12" : DS.surface}
-      onMouseLeave={e => e.currentTarget.style.background = isMe ? DS.signal + "08" : "transparent"}
+      onMouseEnter={e => e.currentTarget.style.background = isMe ? tint(DS.signal,"12") : DS.surface}
+      onMouseLeave={e => e.currentTarget.style.background = isMe ? tint(DS.signal,"08") : "transparent"}
     >
       <span style={{
         fontFamily: "'JetBrains Mono', monospace",
@@ -364,8 +364,8 @@ function LBRow({ rank, name, flag, pts, wins, isMe, delay }) {
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <div style={{
           width: 30, height: 30, borderRadius: "50%",
-          background: isMe ? DS.signal + "18" : DS.surface2,
-          border: `1px solid ${isMe ? DS.signal + "40" : DS.rim}`,
+          background: isMe ? tint(DS.signal,"18") : DS.surface2,
+          border: `1px solid ${isMe ? tint(DS.signal,"40") : DS.rim}`,
           display: "flex", alignItems: "center", justifyContent: "center",
           fontSize: 14, flexShrink: 0,
         }}>{isMe ? "⭐" : ["😎", "🦊", "🌶️", "🐉"][rank - 1] || "👤"}</div>
@@ -677,8 +677,8 @@ function WatchLivePage({ onNavigate, liveCount }) {
             <button key={f} onClick={() => setFilter(f)} style={{
               padding: "6px 14px",
               borderRadius: 14,
-              border: `1px solid ${filter === f ? DS.signal + "66" : DS.rim}`,
-              background: filter === f ? DS.signal + "12" : "transparent",
+              border: `1px solid ${filter === f ? tint(DS.signal,"66") : DS.rim}`,
+              background: filter === f ? tint(DS.signal,"12") : "transparent",
               color: filter === f ? DS.signal : DS.ash,
               fontFamily: "'Inter', sans-serif",
               fontWeight: 500,
@@ -876,7 +876,7 @@ function GoLivePage({ user, onNavigate, webrtc }) {
             </div>
 
             {webrtc.camErr && (
-              <div style={{ background: DS.live + "12", border: `1px solid ${DS.live}33`, borderRadius: 10, padding: "10px 14px", fontSize: 12, color: DS.live, marginBottom: 16 }}>
+              <div style={{ background: tint(DS.live,"12"), border: `1px solid ${tint(DS.live,"33")}`, borderRadius: 10, padding: "10px 14px", fontSize: 12, color: DS.live, marginBottom: 16 }}>
                 {webrtc.camErr}
               </div>
             )}
@@ -1299,7 +1299,7 @@ export default function StrangerPlay() {
                 <div style={{
                   width: "min(220px,60vw)", aspectRatio: "4/3",
                   borderRadius: 14, overflow: "hidden",
-                  border: `1px solid ${DS.signal}44`, background: DS.surface2, position: "relative",
+                  border: `1px solid ${tint(DS.signal,"44")}`, background: DS.surface2, position: "relative",
                 }}>
                   <video
                     ref={el => { webrtc.localRef.current = el; if (el && webrtc.stream) { el.srcObject = webrtc.stream; el.play().catch(() => {}); } }}
@@ -1316,11 +1316,11 @@ export default function StrangerPlay() {
               )}
 
               {webrtc.camErr && (
-                <div style={{ background: DS.live + "18", border: `1px solid ${DS.live}44`, borderRadius: 10, padding: "10px 16px", fontSize: 12, color: DS.live, maxWidth: 280, textAlign: "center" }}>{webrtc.camErr}</div>
+                <div style={{ background: tint(DS.live,"18"), border: `1px solid ${tint(DS.live,"44")}`, borderRadius: 10, padding: "10px 16px", fontSize: 12, color: DS.live, maxWidth: 280, textAlign: "center" }}>{webrtc.camErr}</div>
               )}
 
               {queueErr && (
-                <div style={{ background: DS.live + "18", border: `1px solid ${DS.live}44`, borderRadius: 10, padding: "10px 16px", fontSize: 12, color: DS.live, maxWidth: 280, textAlign: "center" }}>
+                <div style={{ background: tint(DS.live,"18"), border: `1px solid ${tint(DS.live,"44")}`, borderRadius: 10, padding: "10px 16px", fontSize: 12, color: DS.live, maxWidth: 280, textAlign: "center" }}>
                   {queueErr}
                   {!localStorage.getItem("tz_token") && (
                     <div><button onClick={() => goTo("login")} style={{ marginTop: 8, background: "none", border: "none", color: DS.signal, cursor: "pointer", fontSize: 12, textDecoration: "underline" }}>Go to login</button></div>
@@ -1450,7 +1450,7 @@ export default function StrangerPlay() {
                 {/* Stranger credential — top left */}
                 <div style={{ position: "absolute", top: 14, left: 14, zIndex: 5 }}>
                   <div style={{
-                    background: DS.void + "c0", backdropFilter: "blur(12px)",
+                    background: tint(DS.void,"c0"), backdropFilter: "blur(12px)",
                     border: `1px solid ${DS.rim}`, borderRadius: 10, padding: "5px 12px",
                     display: "flex", alignItems: "center", gap: 7,
                   }}>
@@ -1470,7 +1470,7 @@ export default function StrangerPlay() {
                 {/* Points on the line — top right */}
                 <div style={{ position: "absolute", top: 14, right: 14, zIndex: 5 }}>
                   <div style={{
-                    background: DS.void + "c0", backdropFilter: "blur(12px)",
+                    background: tint(DS.void,"c0"), backdropFilter: "blur(12px)",
                     border: `1px solid ${DS.rim}`, borderRadius: 10, padding: "4px 10px",
                     fontFamily: "'JetBrains Mono', monospace", fontSize: 9.5, color: DS.ash, letterSpacing: 1.5,
                   }}>STRANGER</div>
@@ -1520,7 +1520,7 @@ export default function StrangerPlay() {
                 {/* YOU label — top left */}
                 <div style={{ position: "absolute", top: 14, left: 14, zIndex: 5 }}>
                   <div style={{
-                    background: DS.void + "c0", backdropFilter: "blur(12px)", borderRadius: 10,
+                    background: tint(DS.void,"c0"), backdropFilter: "blur(12px)", borderRadius: 10,
                     border: `1px dashed ${DS.rim}`, padding: "4px 10px",
                     fontFamily: "'JetBrains Mono', monospace", fontSize: 9.5, color: DS.ash, letterSpacing: 1.5,
                   }}>YOU</div>
@@ -1535,7 +1535,7 @@ export default function StrangerPlay() {
                 <div style={{
                   position: "absolute", bottom: 0, left: 0, right: 0, zIndex: 10,
                   padding: "0 16px 16px",
-                  background: `linear-gradient(to top, ${DS.void}f0 0%, ${DS.void}99 60%, transparent 100%)`,
+                  background: `linear-gradient(to top, ${tint(DS.void,"f0")} 0%, ${tint(DS.void,"99")} 60%, transparent 100%)`,
                 }}>
 
                   {/* Game pills — horizontal scroll on small screens */}
@@ -1652,7 +1652,7 @@ export default function StrangerPlay() {
                   position: "absolute", top: "50%", left: "50%",
                   transform: "translate(-50%, -50%)",
                   background: "rgba(0,0,0,0.9)", backdropFilter: "blur(16px)",
-                  border: `1px solid ${DS.signal}66`,
+                  border: `1px solid ${tint(DS.signal,"66")}`,
                   borderRadius: 16, padding: "18px 24px",
                   display: "flex", flexDirection: "column", alignItems: "center", gap: 12,
                   zIndex: 30, minWidth: 200, textAlign: "center",
@@ -1714,7 +1714,7 @@ export default function StrangerPlay() {
           </div>
 
           <div className="sp-card" style={{ overflow: "hidden" }}>
-            <div style={{ display: "grid", gridTemplateColumns: "48px 1fr 100px 72px", padding: "10px 20px", borderBottom: `1px solid ${DS.rim}`, fontSize: 10, color: DS.ash, letterSpacing: 2, textTransform: "uppercase", fontFamily: "'JetBrains Mono', monospace" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "clamp(34px,9vw,48px) minmax(0,1fr) clamp(62px,19vw,100px) clamp(40px,12vw,72px)", padding: "10px 20px", borderBottom: `1px solid ${DS.rim}`, fontSize: 10, color: DS.ash, letterSpacing: 2, textTransform: "uppercase", fontFamily: "'JetBrains Mono', monospace" }}>
               <span /><span>Player</span><span>Points</span><span className="lb-wins">Wins</span>
             </div>
             {leaderboard.length === 0 ? (
@@ -1751,7 +1751,7 @@ export default function StrangerPlay() {
         />
       )}
 
-      {page === "rewards"  && <Rewards  onNavigate={goTo} />}
+      {page === "rewards"  && <Rewards  onNavigate={goTo} user={user} points={points} />}
       {page === "settings" && <Settings onNavigate={navTo} user={user} token={localStorage.getItem("tz_token")} onLogout={handleLogout} onUserUpdate={handleLogin} theme={theme} onToggleTheme={toggleTheme} />}
       {page === "messages" && <ComingSoon title="Messages are on the way" text="Soon you will be able to keep chatting with people you met on a call, even after it ends." onHome={() => goTo("home")} />}
 
