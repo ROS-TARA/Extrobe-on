@@ -19,8 +19,9 @@
 
   Same features on every screen size:
     PC     sidebar (all pages) + top bar (search, points, coins, theme, account menu)
-    Phone  bottom tabs (Home, Match, Live, Ranking) + a "More" sheet holding everything else
-           (Rewards, Messages, Profile, Settings, points, coins, theme, online count, log out)
+    Phone  Instagram-style bottom tabs: Home, Match, Live, Messages and Profile (your avatar,
+           bottom-right). A menu button (top-right) opens a sheet with everything else:
+           Rewards, Ranking, Settings, theme, log out, coins, online count.
 */
 import { useEffect, useRef, useState } from "react";
 
@@ -40,21 +41,21 @@ const UserI = () => <Ic><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 
 const SearchI = () => <Ic size={18}><circle cx="11" cy="11" r="6.5" /><path d="m20 20-4-4" /></Ic>;
 const SunI = () => <Ic size={18}><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></Ic>;
 const MoonI = () => <Ic size={18}><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" /></Ic>;
-const MoreI = () => <Ic><circle cx="5" cy="12" r="1.2" /><circle cx="12" cy="12" r="1.2" /><circle cx="19" cy="12" r="1.2" /></Ic>;
+const MenuI = () => <Ic><path d="M4 7h16M4 12h16M4 17h16" /></Ic>;
 const SettingsI = () => <Ic><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" /></Ic>;
 const LogoutI = () => <Ic><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><path d="m16 17 5-5-5-5M21 12H9" /></Ic>;
 const GlobeI = () => <Ic size={22}><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18" /></Ic>;
 
-// tab: shown in the phone's bottom bar. Everything else lives in the "More" sheet.
-// auth: guests are sent to sign in.
+// tab: shown in the phone's bottom bar (Profile is last = bottom-right, like Instagram).
+// Everything else is in the menu sheet (top-right button).  auth: guests are sent to sign in.
 const NAV = [
-  { key: "home", label: "Home", short: "Home", Icon: HomeI, tab: true },
-  { key: "match", label: "Random match", short: "Match", Icon: VideoI, tab: true },
-  { key: "live", label: "Live", short: "Live", Icon: LiveI, tab: true },
-  { key: "messages", label: "Messages", short: "Messages", Icon: ChatI },
-  { key: "rewards", label: "Rewards", short: "Rewards", Icon: StarI },
-  { key: "ranking", label: "Ranking", short: "Ranking", Icon: TrophyI, tab: true },
-  { key: "profile", label: "Profile", short: "Profile", Icon: UserI, auth: true },
+  { key: "home", label: "Home", Icon: HomeI, tab: true },
+  { key: "match", label: "Random match", Icon: VideoI, tab: true },
+  { key: "live", label: "Live", Icon: LiveI, tab: true },
+  { key: "messages", label: "Messages", Icon: ChatI, tab: true },
+  { key: "rewards", label: "Rewards", Icon: StarI },
+  { key: "ranking", label: "Ranking", Icon: TrophyI },
+  { key: "profile", label: "Profile", Icon: UserI, tab: true, auth: true },
 ];
 
 function Logo({ size = 28, word = true }) {
@@ -121,7 +122,6 @@ export default function AppShell({
   };
   const tabs = NAV.filter((n) => n.tab);
   const moreItems = NAV.filter((n) => !n.tab);
-  const moreActive = moreItems.some((n) => n.key === page);
   const shownPoints = typeof points === "number" ? points : (user && user.points) || 0;
   const coins = user && user.coins != null ? user.coins : 0;
 
@@ -158,7 +158,7 @@ export default function AppShell({
 
           <div className="tzs-right" ref={menuRef}>
             <button className="tzs-icon tzs-searchbtn" onClick={() => setSearchOpen(!searchOpen)} aria-label="Search players" aria-expanded={searchOpen}><SearchI /></button>
-            {user && <span className="tzs-pts" title="Your points">{shownPoints.toLocaleString()} pts</span>}
+            {user && <button className="tzs-pts" onClick={() => onNavigate && onNavigate("rewards")} title="Your points — tap for rewards" aria-label={`${shownPoints} points. Open rewards`}>{shownPoints.toLocaleString()} pts</button>}
             {user && (
               <button className="tzs-coins" onClick={onBuyCoins} title="Buy more coins" aria-label={`Coins: ${coins}. Buy more`}>
                 <i />{coins}
@@ -185,6 +185,7 @@ export default function AppShell({
             ) : (
               <button className="tzs-login" onClick={onLogin}>Sign in</button>
             )}
+            <button className="tzs-icon tzs-menubtn" onClick={() => setMore(!more)} aria-label="Menu" aria-haspopup="dialog" aria-expanded={more}><MenuI /></button>
           </div>
         </header>
 
@@ -193,13 +194,10 @@ export default function AppShell({
 
       <nav className="tzs-tabs" aria-label="Main">
         {tabs.map((n) => (
-          <button key={n.key} className={page === n.key ? "on" : ""} onClick={() => go(n)} aria-current={page === n.key ? "page" : undefined}>
-            <n.Icon /><span>{n.short}</span>
+          <button key={n.key} className={page === n.key ? "on" : ""} onClick={() => go(n)} aria-label={n.label} title={n.label} aria-current={page === n.key ? "page" : undefined}>
+            {n.key === "profile" && user ? <Avatar user={user} size={28} /> : <n.Icon />}
           </button>
         ))}
-        <button className={moreActive || more ? "on" : ""} onClick={() => setMore(!more)} aria-haspopup="dialog" aria-expanded={more}>
-          <MoreI /><span>More</span>
-        </button>
       </nav>
 
       {more && (
@@ -216,7 +214,7 @@ export default function AppShell({
             )}
             {user && (
               <div className="tzs-sheet-stats">
-                <span className="tzs-pts">{shownPoints.toLocaleString()} pts</span>
+                <span className="tzs-pts tzs-pts-static">{shownPoints.toLocaleString()} pts</span>
                 <button className="tzs-coins" onClick={() => { setMore(false); onBuyCoins && onBuyCoins(); }}><i />{coins} · Buy coins</button>
               </div>
             )}
@@ -279,6 +277,8 @@ const CSS = `
 .tzs-search input{flex:1;min-width:0;height:100%;border:0;outline:0;background:none;color:var(--sp-plat);font-size:15px}
 .tzs-search input::placeholder{color:var(--sp-ghost)}
 .tzs-right{position:relative;margin-left:auto;display:flex;align-items:center;gap:10px}
+.tzs button.tzs-pts{color:var(--sp-gold);cursor:pointer;transition:border-color .18s,background .18s}
+.tzs button.tzs-pts:hover{border-color:var(--sp-gold);background:color-mix(in srgb,var(--sp-gold) 16%,transparent)}
 .tzs-pts{padding:7px 12px;border:1px solid color-mix(in srgb,var(--sp-gold) 32%,transparent);border-radius:999px;background:color-mix(in srgb,var(--sp-gold) 10%,transparent);color:var(--sp-gold);font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:600}
 .tzs-coins{display:inline-flex;align-items:center;gap:7px;padding:7px 12px;border:1px solid var(--sp-rim);border-radius:999px;background:var(--sp-surface);font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:600;cursor:pointer;transition:border-color .18s}
 .tzs-coins:hover{border-color:var(--sp-signal)}
@@ -303,7 +303,7 @@ const CSS = `
 .tzs-tabs{display:none}
 .tzs button:focus-visible,.tzs input:focus-visible{outline:2px solid var(--sp-signal);outline-offset:2px}
 
-.tzs-searchbtn{display:none}
+.tzs-searchbtn,.tzs-menubtn{display:none}
 .tzs-sheet,.tzs-back{display:none}
 
 @media (max-width:1100px){.tzs-uname,.tzs-chev{display:none}}
@@ -312,8 +312,10 @@ const CSS = `
   .tzs-side{display:none}
   .tzs-top{flex-wrap:wrap;padding:10px 14px;padding-top:calc(10px + env(safe-area-inset-top,0px));gap:8px}
   .tzs-top-logo{display:inline-flex}
-  .tzs-searchbtn{display:grid}
-  .tzs-theme{display:none}
+  .tzs-searchbtn,.tzs-menubtn{display:grid}
+  .tzs-theme,.tzs-user,.tzs-login-desktop{display:none}
+  .tzs-top-logo{flex:none}
+  .tzs-right{flex:none;min-width:0}
   .tzs-search{display:none;order:5;flex:1 1 100%;max-width:none;height:40px}
   .tzs-search.open{display:flex}
   .tzs-right{gap:8px}
@@ -321,9 +323,14 @@ const CSS = `
   .tzs-coins{padding:6px 9px;font-size:11px}
   .tzs-icon{width:36px;height:36px}
   .tzs-content{padding:18px 14px calc(88px + env(safe-area-inset-bottom,0px))}
-  .tzs-tabs{position:fixed;left:0;right:0;bottom:0;z-index:30;display:grid;grid-auto-flow:column;grid-auto-columns:1fr;padding:6px 6px calc(6px + env(safe-area-inset-bottom,0px));background:color-mix(in srgb,var(--sp-surface) 94%,transparent);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-top:1px solid var(--sp-rim)}
-  .tzs-tabs button{display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 2px;border:0;border-radius:12px;background:none;color:var(--sp-ash);font-size:11px;font-weight:500;cursor:pointer;transition:color .18s}
+  .tzs-tabs{position:fixed;left:0;right:0;bottom:0;z-index:30;display:grid;grid-auto-flow:column;grid-auto-columns:1fr;align-items:center;padding:4px 8px calc(4px + env(safe-area-inset-bottom,0px));background:color-mix(in srgb,var(--sp-surface) 94%,transparent);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-top:1px solid var(--sp-rim)}
+  .tzs-tabs button{display:grid;place-items:center;height:52px;border:0;border-radius:14px;background:none;color:var(--sp-ash);cursor:pointer;transition:color .18s,transform .18s}
+  .tzs-tabs button:active{transform:scale(.92)}
+  .tzs-tabs svg{width:27px;height:27px}
   .tzs-tabs button.on{color:var(--sp-signal)}
+  .tzs-tabs button.on svg{stroke-width:2.3}
+  .tzs-tabs .tzs-avatar,.tzs-tabs img{border:2px solid transparent;transition:box-shadow .18s}
+  .tzs-tabs button.on .tzs-avatar,.tzs-tabs button.on img{box-shadow:0 0 0 2px var(--sp-void),0 0 0 4px var(--sp-signal)}
 
   .tzs-back{position:fixed;inset:0;z-index:60;display:flex;align-items:flex-end;background:rgba(0,0,0,.55);animation:tzs-fade .18s ease-out}
   .tzs-sheet{display:block;width:100%;max-height:86dvh;overflow:auto;padding:10px 16px calc(18px + env(safe-area-inset-bottom,0px));border:1px solid var(--sp-rim);border-bottom:0;border-radius:24px 24px 0 0;background:var(--sp-surface);box-shadow:0 -20px 50px rgba(0,0,0,.4);animation:tzs-rise .24s cubic-bezier(.2,.8,.2,1)}
