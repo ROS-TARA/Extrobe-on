@@ -1063,7 +1063,7 @@ export default function GameScreen({
      RENDER
   ───────────────────────────────────────────── */
   return (
-    <div style={{ minHeight:"100vh", background:DS.void, backgroundAttachment:"fixed", color:"var(--sp-plat)", fontFamily:"'Inter',sans-serif", display:"flex", flexDirection:"column" }}>
+    <div data-sp-scope="dark" style={{ minHeight:"100vh", background:DS.void, backgroundAttachment:"fixed", color:"var(--sp-plat)", fontFamily:"'Inter',sans-serif", display:"flex", flexDirection:"column" }}>
       <style>{CSS}</style>
 
       {/* hidden video for face detection processing */}
@@ -1091,7 +1091,7 @@ export default function GameScreen({
 
           {/* score header */}
           {phase !== "loading" && (
-            <div style={{ display:"grid", gridTemplateColumns:"1fr auto 1fr", alignItems:"center", gap:8, animation:"fadeUp 0.4s both" }}>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr auto 1fr", alignItems:"center", gap:8 }}>
               <div style={{ display:"flex", alignItems:"center", gap:8 }}>
                 <div style={{ width:32, height:32, borderRadius:"50%", background:"rgba(0,245,160,0.1)", border:"2px solid rgba(0,245,160,0.25)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:16 }}>⭐</div>
                 <div>
@@ -1321,7 +1321,7 @@ export default function GameScreen({
         <div style={{ display:"flex", flexDirection:"column", gap:10, overflow:"hidden" }}>
 
           {/* mode info */}
-          <div style={{ background:"color-mix(in srgb, var(--sp-plat) 2.5%, transparent)", border:"1px solid color-mix(in srgb, var(--sp-plat) 6%, transparent)", borderRadius:14, padding:14, animation:"fadeUp 0.4s both" }}>
+          <div style={{ background:"color-mix(in srgb, var(--sp-plat) 2.5%, transparent)", border:"1px solid color-mix(in srgb, var(--sp-plat) 6%, transparent)", borderRadius:14, padding:14 }}>
             <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10 }}>
               <span style={{ fontSize:24 }}>{mode.emoji}</span>
               <div>

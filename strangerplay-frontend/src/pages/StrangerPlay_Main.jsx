@@ -39,30 +39,17 @@ const DS = {
 // Expose globally so Settings.jsx can call it without importing
 window.applyTheme = function(theme) {
   document.documentElement.dataset.theme = theme;
-  localStorage.setItem("sp_theme", theme);
+  localStorage.setItem("sp_theme_v2", theme);
 };
 
 // Apply saved theme immediately on load (before first render)
-window.applyTheme(localStorage.getItem("sp_theme") || "dark");
+window.applyTheme(localStorage.getItem("sp_theme_v2") || "light");
 
 const GLOBAL_CSS = `
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
   /* ── CSS VARIABLES ─────────────────────────────── */
-  :root, html[data-theme="dark"] {
-    --sp-void:    #18191a;
-    --sp-surface: #242526;
-    --sp-surface2:#3a3b3c;
-    --sp-rim:     #3e4042;
-    --sp-plat:    #e4e6eb;
-    --sp-ash:     #b0b3b8;
-    --sp-ghost:   #6a6b6c;
-    --sp-signal:  #2374e1;
-    --sp-live:    #f02849;
-    --sp-ice:     #45bd62;
-    --sp-gold:    #f7b928;
-  }
-  html[data-theme="light"] {
+  :root, html[data-theme="light"] {
     --sp-void:    #f0f2f5;
     --sp-surface: #ffffff;
     --sp-surface2:#f7f8fa;
@@ -74,6 +61,19 @@ const GLOBAL_CSS = `
     --sp-live:    #e41e3f;
     --sp-ice:     #31a24c;
     --sp-gold:    #e8a400;
+  }
+  html[data-theme="dark"], [data-sp-scope="dark"] {
+    --sp-void:    #18191a;
+    --sp-surface: #242526;
+    --sp-surface2:#3a3b3c;
+    --sp-rim:     #3e4042;
+    --sp-plat:    #e4e6eb;
+    --sp-ash:     #b0b3b8;
+    --sp-ghost:   #6a6b6c;
+    --sp-signal:  #2374e1;
+    --sp-live:    #f02849;
+    --sp-ice:     #45bd62;
+    --sp-gold:    #f7b928;
   }
 
   /* ── RESET ───────────────────────────────────── */
@@ -98,7 +98,8 @@ const GLOBAL_CSS = `
   @keyframes sp-spin   { to{transform:rotate(360deg)} }
   @keyframes sp-ticker { from{transform:translateX(100%)} to{transform:translateX(-100%)} }
 
-  .sp-page { animation: sp-enter 0.25s ease both; }
+  /* calm by design: no entrance animations (spinners, the live dot and game feedback still animate) */
+  .sp-page, .sp-up { animation: none !important; }
 
   /* ── BUTTONS ────────────────────────────────── */
   .sp-btn-primary {
@@ -973,7 +974,7 @@ export default function StrangerPlay() {
   /* ── THEME — toggle between dark and light, persists in localStorage.
      window.applyTheme is defined at module load, sets data-theme on <html>
      which flips every CSS variable across Main, GameScreen, GameSection. */
-  const [theme, setTheme] = useState(() => localStorage.getItem("sp_theme") || "dark");
+  const [theme, setTheme] = useState(() => localStorage.getItem("sp_theme_v2") || "light");
   const toggleTheme = () => {
     const next = theme === "dark" ? "light" : "dark";
     setTheme(next);
@@ -1275,7 +1276,7 @@ export default function StrangerPlay() {
           PLAY — matchmaking + live call
       ══════════════════════════════ */}
       {page === "play" && (
-        <div style={matchPhase === "connected"
+        <div data-sp-scope={matchPhase === "connected" ? "dark" : undefined} style={matchPhase === "connected"
           ? { position: "fixed", inset: 0, zIndex: 10, background: "#000" }
           : { position: "relative", height: "min(780px, calc(100dvh - 150px))", minHeight: 520, maxWidth: 980, margin: "0 auto", overflow: "auto", border: `1px solid ${DS.rim}`, borderRadius: 24, background: DS.void }}>
 

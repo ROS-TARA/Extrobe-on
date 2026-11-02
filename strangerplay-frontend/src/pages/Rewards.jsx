@@ -75,7 +75,7 @@ const css = `
     50%      { border-color: color-mix(in srgb, var(--sp-gold) 60%, transparent); }
   }
 
-  .fade-up { animation: fadeUp 0.5s both; }
+  .fade-up { animation: none; }
 
   .reward-card {
     transition: transform 0.25s, box-shadow 0.25s;
@@ -221,7 +221,6 @@ function ShimmerText({ children, color1 = "var(--sp-signal)", color2 = "color-mi
       WebkitBackgroundClip: "text",
       WebkitTextFillColor: "transparent",
       backgroundClip: "text",
-      animation: "shimmer 3s linear infinite",
       display: "inline-block",
     }}>{children}</span>
   );
@@ -236,7 +235,6 @@ function GoldText({ children }) {
       WebkitBackgroundClip: "text",
       WebkitTextFillColor: "transparent",
       backgroundClip: "text",
-      animation: "goldShimmer 2.5s linear infinite",
       display: "inline-block",
     }}>{children}</span>
   );
@@ -251,7 +249,6 @@ function Orb({ x, y, size, color, delay = 0, dur = 7 }) {
       borderRadius: "50%",
       background: `radial-gradient(circle at 35% 35%, ${tint(color,"33")}, transparent 70%)`,
       filter: "blur(60px)",
-      animation: `orbFloat ${dur}s ease-in-out ${delay}s infinite`,
       pointerEvents: "none", zIndex: 0,
     }} />
   );
@@ -267,7 +264,6 @@ function ProgressBar({ value, max, color, delay = 0 }) {
         width: `${pct}%`,
         background: `linear-gradient(90deg, ${tint(color,"88")}, ${color})`,
         boxShadow: `0 0 10px ${tint(color,"55")}`,
-        animation: `barGrow 1.2s cubic-bezier(0.22,1,0.36,1) ${delay}s both`,
       }} />
     </div>
   );
@@ -299,20 +295,8 @@ function RewardCard({ tier, userPoints, delay = 0, onSelect }) {
         padding: "28px 24px",
         position: "relative",
         overflow: "hidden",
-        animation: `rewardReveal 0.55s ${delay}s both`,
-        ...(current ? { animation: `rewardReveal 0.55s ${delay}s both, borderGlow 2.5s 0.55s infinite` } : {}),
       }}
     >
-      {/* Scanline effect on unlocked cards */}
-      {unlocked && (
-        <div style={{
-          position: "absolute", left: 0, right: 0, height: 1,
-          background: `linear-gradient(90deg, transparent, ${tint(tier.color,"40")}, transparent)`,
-          animation: "scanline 4s linear infinite",
-          pointerEvents: "none",
-        }} />
-      )}
-
       {/* Lock overlay on locked cards */}
       {!unlocked && (
         <div style={{
@@ -328,7 +312,7 @@ function RewardCard({ tier, userPoints, delay = 0, onSelect }) {
       {/* Header */}
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 20 }}>
         <div>
-          <div style={{ fontSize: 32, marginBottom: 6, filter: unlocked ? "none" : "grayscale(0.7) opacity(0.5)", animation: unlocked ? `lockPop 0.5s ${delay + 0.1}s both` : "none" }}>
+          <div style={{ fontSize: 32, marginBottom: 6, filter: unlocked ? "none" : "grayscale(0.7) opacity(0.5)" }}>
             {tier.emoji}
           </div>
           <div style={{
@@ -392,7 +376,6 @@ function RewardCard({ tier, userPoints, delay = 0, onSelect }) {
           border: `1px solid ${tier.border}`,
           borderRadius: 8, padding: "8px 14px",
           display: "flex", alignItems: "center", gap: 8,
-          animation: `lockPop 0.5s ${delay + 0.25}s both`,
         }}>
           <div style={{ width: 6, height: 6, borderRadius: "50%", background: tier.color, boxShadow: `0 0 8px ${tier.color}` }} />
           <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: tier.color }}>UNLOCKED — active on your profile</span>
@@ -437,7 +420,6 @@ function MilestoneTrack({ userPoints, rank }) {
                   border: `2px solid ${reached ? m.color : "color-mix(in srgb, var(--sp-plat) 8%, transparent)"}`,
                   display: "flex", alignItems: "center", justifyContent: "center",
                   fontSize: 14, boxShadow: reached ? `0 0 16px ${tint(m.color,"44")}` : "none",
-                  animation: isCurrent ? "glowPulse 2s infinite" : "none",
                   transition: "all 0.3s",
                 }}>
                   {reached ? "✓" : i === 0 ? "●" : "○"}
@@ -466,7 +448,7 @@ function MilestoneTrack({ userPoints, rank }) {
 
       {/* Current position label */}
       <div style={{ marginTop: 20, paddingTop: 16, borderTop: "1px solid color-mix(in srgb, var(--sp-plat) 5%, transparent)", display: "flex", alignItems: "center", gap: 10 }}>
-        <div style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--sp-signal)", boxShadow: "0 0 10px var(--sp-signal)", animation: "glowPulse 1.5s infinite" }} />
+        <div style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--sp-signal)", boxShadow: "0 0 10px var(--sp-signal)" }} />
         <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: "var(--sp-ghost)" }}>
           you are here → <span style={{ color: "var(--sp-signal)" }}>{userPoints} pts</span> · {rank} · next tier at <span style={{ color: "color-mix(in srgb, var(--sp-signal) 55%, #6fd8ff)" }}>100 pts</span>
         </span>
@@ -505,7 +487,6 @@ function RewardModal({ tier, userPoints, onClose }) {
         maxHeight: "85vh", overflowY: "auto",
       }}>
         {/* Scanline */}
-        <div style={{ position: "absolute", left: 0, right: 0, height: 1, background: `linear-gradient(90deg, transparent, ${tint(tier.color,"50")}, transparent)`, animation: "scanline 3s linear infinite", pointerEvents: "none" }} />
 
         <button onClick={onClose} style={{ position: "absolute", top: 16, right: 16, background: "color-mix(in srgb, var(--sp-plat) 6%, transparent)", border: "none", borderRadius: "50%", width: 32, height: 32, color: "var(--sp-ghost)", cursor: "pointer", fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
 
@@ -525,7 +506,6 @@ function RewardModal({ tier, userPoints, onClose }) {
               border: "1px solid color-mix(in srgb, var(--sp-plat) 6%, transparent)",
               borderRadius: 10, padding: "12px 16px",
               opacity: unlocked ? 1 : 0.4,
-              animation: `fadeUp 0.4s ${i * 0.06}s both`,
             }}>
               <span style={{ fontSize: 20, flexShrink: 0 }}>{perk.icon}</span>
               <span style={{ fontSize: 13, color: "var(--sp-ash)", lineHeight: 1.5 }}>{perk.text}</span>
@@ -559,12 +539,6 @@ function RewardModal({ tier, userPoints, onClose }) {
 }
 
 /* ── Ticker ── */
-/*
-  TEACH: The ticker creates a scrolling news-feed style strip.
-  It uses CSS animation (tickerMove) to slide content left infinitely.
-  The trick: duplicate the content so it loops seamlessly.
-*/
-
 /* ═══════════════════════════════════════════════
    MAIN EXPORT
 ═══════════════════════════════════════════════ */
@@ -599,7 +573,7 @@ export default function Rewards({ onNavigate, user, points }) {
       <div style={{ position: "relative", zIndex: 1, maxWidth: 1100, margin: "0 auto", padding: "clamp(80px,12vw,120px) clamp(16px,5vw,60px) 120px" }}>
 
         {/* Header */}
-        <div style={{ marginBottom: 48, animation: "fadeUp 0.5s both" }}>
+        <div style={{ marginBottom: 48 }}>
           <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: "var(--sp-ghost)", letterSpacing: 4, textTransform: "uppercase", marginBottom: 10 }}>
             // what you unlock for not being bad at this
           </div>
@@ -619,7 +593,6 @@ export default function Rewards({ onNavigate, user, points }) {
           marginBottom: 36,
           display: "flex", alignItems: "center", gap: 20,
           flexWrap: "wrap",
-          animation: "fadeUp 0.5s 0.1s both",
         }}>
           <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 48, color: "var(--sp-gold)", lineHeight: 1, textShadow: "0 0 24px color-mix(in srgb, var(--sp-gold) 40%, transparent)" }}>
             {userPoints}
@@ -644,7 +617,6 @@ export default function Rewards({ onNavigate, user, points }) {
                   fontSize: 15, letterSpacing: 1.5,
                   padding: "10px 22px", cursor: "pointer",
                   boxShadow: "0 0 16px rgba(0,245,160,0.3)",
-                  animation: "glowPulse 3s infinite",
                 }}
               >PLAY NOW →</button>
             )}
@@ -657,7 +629,7 @@ export default function Rewards({ onNavigate, user, points }) {
         <MilestoneTrack userPoints={userPoints} rank={rank} />
 
         {/* Filter buttons */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 32, flexWrap: "wrap", animation: "fadeUp 0.5s 0.2s both" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 32, flexWrap: "wrap" }}>
           <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: "var(--sp-ghost)", marginRight: 4 }}>show:</span>
           {[["all", "All tiers"], ["unlocked", "Unlocked"], ["locked", "Locked"]].map(([val, label]) => (
             <button
@@ -678,7 +650,7 @@ export default function Rewards({ onNavigate, user, points }) {
         {/* Reward cards grid */}
         <div
           className="rewards-grid"
-          style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 20, animation: "fadeUp 0.5s 0.25s both" }}
+          style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 20 }}
         >
           {filtered.map((tier, i) => (
             <RewardCard
@@ -692,7 +664,7 @@ export default function Rewards({ onNavigate, user, points }) {
         </div>
 
         {/* Bottom note */}
-        <div style={{ marginTop: 56, textAlign: "center", animation: "fadeUp 0.5s 0.4s both" }}>
+        <div style={{ marginTop: 56, textAlign: "center" }}>
           <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: "var(--sp-rim)", marginBottom: 10 }}>
             // points earned by winning wagers in live games. no purchases. no shortcuts.
           </div>
