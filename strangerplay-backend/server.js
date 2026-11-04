@@ -116,6 +116,13 @@ const UserSchema = new mongoose.Schema({
     youtube:   { type: String, default: "" },
     twitter:   { type: String, default: "" },
   },
+  // ── profile: all of this is saved on the server, so it is the same on every device ──
+  avatarData:  { type: Buffer, select: false },   // the photo itself (≤ 60 KB JPEG/PNG/WebP), never sent in normal queries
+  avatarType:  { type: String, default: "" },
+  avatarV:     { type: Number, default: 0 },       // changes whenever the photo changes → cache-busting URL
+  theme:       { type: String, default: "ocean" }, // card colour
+  tags:        { type: [String], default: [] },    // "vibe" tags, max 5
+  favGame:     { type: String, default: "" },
   rank:        { type: String, default: "Bronze I" },
   globalRank:  { type: Number, default: 9999 },
   // forgot-password: we store a HASH of the token, never the raw token.
@@ -203,9 +210,90 @@ function safeUser(u) {
     following: u.following,
     bio: u.bio,
     socialLinks: u.socialLinks || {},
+    avatar: avatarUrl(u),
+    theme: u.theme || "ocean",
+    tags: u.tags || [],
+    favGame: u.favGame || "",
     rank: calculateRank(u.points),
     createdAt: u.createdAt,
   };
+}
+
+// What anyone may see on a public profile: no email, no coin balance.
+function publicUser(u) {
+  const { email, coins, ...pub } = safeUser(u);
+  return pub;
+}
+
+// The photo is served from its own URL (not inside every login / socket message).
+function avatarUrl(u) {
+  return u.avatarV ? `/api/user/${encodeURIComponent(u.username)}/avatar?v=${u.avatarV}` : "";
+}
+
+/* ─────────────────────────────────────────────
+   PROFILE VALIDATION — nothing from the browser is trusted
+───────────────────────────────────────────── */
+const PROFILE_THEMES = ["ocean", "sky", "violet", "mint", "sunset", "rose", "graphite"];
+const SOCIAL_KEYS = ["instagram", "tiktok", "youtube", "twitter"];
+const stripCtl = (v) => String(v).replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+
+// Returns { update } with only the fields that were sent and are valid, or { error }.
+function parseProfile(body = {}) {
+  const update = {};
+  const bad = (error) => ({ error });
+  if (body.name !== undefined) {
+    const v = typeof body.name === "string" ? stripCtl(body.name) : "";
+    if (v.length < 1 || v.length > 30) return bad("name must be 1–30 characters");
+    update.name = v;
+  }
+  if (body.bio !== undefined) {
+    if (typeof body.bio !== "string") return bad("bio must be text");
+    const v = body.bio.replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, "").trim();
+    if (v.length > 140) return bad("bio is too long (max 140 characters)");
+    update.bio = v;
+  }
+  if (body.country !== undefined) {
+    const v = typeof body.country === "string" ? stripCtl(body.country) : "";
+    if (v.length > 40) return bad("country is too long");
+    update.country = v;
+  }
+  if (body.flag !== undefined) {
+    const v = typeof body.flag === "string" ? body.flag.trim() : "";
+    if (!/^[\p{Regional_Indicator}\p{Extended_Pictographic}\u200d\ufe0f]{1,12}$/u.test(v)) return bad("flag must be an emoji");
+    update.flag = v;
+  }
+  if (body.favGame !== undefined) {
+    const v = typeof body.favGame === "string" ? stripCtl(body.favGame) : "";
+    if (v && !/^[\p{L}\p{N} '’\-]{1,24}$/u.test(v)) return bad("invalid favourite game");
+    update.favGame = v;
+  }
+  if (body.theme !== undefined) {
+    if (!PROFILE_THEMES.includes(body.theme)) return bad("invalid card colour");
+    update.theme = body.theme;
+  }
+  if (body.tags !== undefined) {
+    if (!Array.isArray(body.tags) || body.tags.length > 5) return bad("choose up to 5 tags");
+    const seen = new Set(), tags = [];
+    for (const t of body.tags) {
+      const v = typeof t === "string" ? stripCtl(t) : "";
+      if (!/^[\p{L}\p{N} &'’\-]{1,16}$/u.test(v)) return bad("a tag has invalid characters or is too long (max 16)");
+      if (!seen.has(v.toLowerCase())) { seen.add(v.toLowerCase()); tags.push(v); }
+    }
+    update.tags = tags;
+  }
+  if (body.socialLinks !== undefined) {
+    if (!body.socialLinks || typeof body.socialLinks !== "object") return bad("invalid social links");
+    for (const key of SOCIAL_KEYS) {
+      if (body.socialLinks[key] === undefined) continue;
+      const raw = typeof body.socialLinks[key] === "string" ? body.socialLinks[key].trim() : null;
+      if (raw === null) return bad(`invalid ${key} handle`);
+      const handle = raw.replace(/^@/, "");
+      // handles only (no URLs) — so a link can never smuggle in "javascript:" or another site
+      if (handle && !/^[A-Za-z0-9._]{1,30}$/.test(handle)) return bad(`${key}: use just your username, like  yourname`);
+      update[`socialLinks.${key}`] = handle;
+    }
+  }
+  return { update };
 }
 
 /* ─────────────────────────────────────────────
@@ -462,7 +550,7 @@ app.get("/api/user/:username", async (req, res) => {
   try {
     const user = await User.findOne({ username: req.params.username.toLowerCase() });
     if (!user) return res.status(404).json({ error: "user not found" });
-    res.json(safeUser(user));
+    res.json(publicUser(user));   // public: never includes the email address or coin balance
   } catch {
     res.status(500).json({ error: "server error" });
   }
@@ -472,18 +560,15 @@ app.get("/api/user/:username", async (req, res) => {
 app.patch("/api/user/settings", auth, async (req, res) => {
   try {
     const { username, email, bio, flag, country, socialLinks } = req.body;
-    const update = {};
-    if (bio !== undefined) update.bio = bio;
-    if (flag)               update.flag = flag;
-    if (country)            update.country = country;
-    if (socialLinks && typeof socialLinks === "object") {
-      // Merge rather than overwrite — Profile only sends what it has, and
-      // Settings might only send some fields. Build it as dot-paths so
-      // Mongo merges instead of replacing the whole sub-object with undefineds.
-      for (const key of ["instagram", "tiktok", "youtube", "twitter"]) {
-        if (socialLinks[key] !== undefined) update[`socialLinks.${key}`] = socialLinks[key];
-      }
-    }
+    // bio / flag / country / social links go through the same validation as the profile editor
+    const picked = {};
+    if (bio !== undefined) picked.bio = bio;
+    if (flag) picked.flag = flag;
+    if (country) picked.country = country;
+    if (socialLinks && typeof socialLinks === "object") picked.socialLinks = socialLinks;
+    const parsed = parseProfile(picked);
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
+    const update = parsed.update;
 
     // username/email are unique-indexed — a blind update would crash with a
     // duplicate-key error if someone else already has that value. Check first,
@@ -505,6 +590,91 @@ app.patch("/api/user/settings", auth, async (req, res) => {
   } catch (e) {
     console.error("settings update error:", e);
     res.status(500).json({ error: "server error" });
+  }
+});
+
+/* ─────────────────────────────────────────────
+   PROFILE — the signed-in user's own account + editable profile
+───────────────────────────────────────────── */
+// GET /api/me — my full account (the app calls this on start so every device shows the latest)
+app.get("/api/me", auth, async (req, res) => {
+  try {
+    const user = await User.findById(req.userId);
+    if (!user) return res.status(404).json({ error: "user not found" });
+    res.set("Cache-Control", "no-store");
+    res.json(safeUser(user));
+  } catch {
+    res.status(500).json({ error: "server error" });
+  }
+});
+
+// PATCH /api/user/profile — name, bio, country, flag, tags, favourite game, card colour, social handles
+app.patch("/api/user/profile", auth, async (req, res) => {
+  try {
+    const parsed = parseProfile(req.body);
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
+    if (!Object.keys(parsed.update).length) return res.status(400).json({ error: "nothing to update" });
+    const user = await User.findByIdAndUpdate(req.userId, parsed.update, { new: true });
+    if (!user) return res.status(404).json({ error: "user not found" });
+    res.json(safeUser(user));
+  } catch (e) {
+    console.error("profile update error:", e.message);
+    res.status(500).json({ error: "server error" });
+  }
+});
+
+// Profile photo: the browser crops it to a small square first; we still re-check everything.
+const AVATAR_MAX_BYTES = 60 * 1024;
+function sniffImage(buf) {
+  if (buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "image/jpeg";
+  if (buf.length > 8 && buf.slice(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png";
+  if (buf.length > 12 && buf.slice(0, 4).toString() === "RIFF" && buf.slice(8, 12).toString() === "WEBP") return "image/webp";
+  return null;
+}
+
+// POST /api/user/avatar   { image: "data:image/jpeg;base64,...." }
+app.post("/api/user/avatar", auth, async (req, res) => {
+  try {
+    const m = /^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/=]+)$/.exec(req.body && req.body.image || "");
+    if (!m) return res.status(400).json({ error: "send a JPEG, PNG or WebP image" });
+    const buf = Buffer.from(m[2], "base64");
+    if (buf.length > AVATAR_MAX_BYTES) return res.status(400).json({ error: "that photo is too large — try a smaller one" });
+    const type = sniffImage(buf);            // the file's real type, not what the browser claims
+    if (!type) return res.status(400).json({ error: "that doesn't look like a valid image" });
+    const user = await User.findByIdAndUpdate(req.userId, { avatarData: buf, avatarType: type, avatarV: Date.now() }, { new: true });
+    if (!user) return res.status(404).json({ error: "user not found" });
+    res.json(safeUser(user));
+  } catch (e) {
+    console.error("avatar upload error:", e.message);
+    res.status(500).json({ error: "server error" });
+  }
+});
+
+// DELETE /api/user/avatar
+app.delete("/api/user/avatar", auth, async (req, res) => {
+  try {
+    const user = await User.findByIdAndUpdate(req.userId, { $unset: { avatarData: 1 }, avatarType: "", avatarV: 0 }, { new: true });
+    if (!user) return res.status(404).json({ error: "user not found" });
+    res.json(safeUser(user));
+  } catch {
+    res.status(500).json({ error: "server error" });
+  }
+});
+
+// GET /api/user/:username/avatar — public image; the ?v= in the URL changes with the photo, so browsers can cache it forever
+app.get("/api/user/:username/avatar", async (req, res) => {
+  try {
+    const user = await User.findOne({ username: String(req.params.username).toLowerCase() }).select("+avatarData avatarType avatarV");
+    if (!user || !user.avatarData || !user.avatarV) return res.status(404).end();
+    res.set({
+      "Content-Type": user.avatarType || "image/jpeg",
+      "Cache-Control": "public, max-age=31536000, immutable",
+      "X-Content-Type-Options": "nosniff",
+      "Cross-Origin-Resource-Policy": "cross-origin",
+    });
+    res.send(Buffer.from(user.avatarData));
+  } catch {
+    res.status(500).end();
   }
 });
 

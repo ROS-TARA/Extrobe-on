@@ -1009,6 +1009,14 @@ export default function StrangerPlay() {
     reconnectSocket(); // new handshake with the fresh tz_token
   };
 
+  // A profile edit: update the app and remember it, but do NOT reconnect the socket (that would drop a call).
+  const handleUserUpdate = (u) => {
+    if (!u) return;
+    setUser(u);
+    setPoints(u.points ?? 0);
+    try { localStorage.setItem("tz_user", JSON.stringify(u)); } catch { /* storage full / blocked */ }
+  };
+
   const handleLogout = () => {
     localStorage.removeItem("tz_token");
     localStorage.removeItem("tz_user");
@@ -1044,6 +1052,7 @@ export default function StrangerPlay() {
   // Latest page/phase for callbacks registered once (socket handlers would otherwise see stale values)
   const liveRef = useRef({ page: "home", matchPhase: "idle" });
   const [profileName, setProfileName] = useState(null);   // null = my own profile, else the player that was searched
+  const [loginFrom, setLoginFrom] = useState("home");        // page to return to from the login screen (Back / after signing in)
   const [proposedGame, setProposedGame] = useState(null);  // game the other side proposed
   const [gameAccepted, setGameAccepted] = useState(false); // both accepted → open GameScreen
   const queueTimerRef  = useRef(null);
@@ -1137,6 +1146,22 @@ export default function StrangerPlay() {
     };
   }, []);
 
+  // On start: refresh my account from the server, so a change made on another device (photo, bio, points)
+  // shows up here. And open a shared card link:  https://yoursite/?u=username
+  useEffect(() => {
+    const t = localStorage.getItem("tz_token");
+    if (t) {
+      fetch(`${import.meta.env.VITE_API_URL || "https://extrobe-on.onrender.com"}/api/me`, { headers: { Authorization: `Bearer ${t}` } })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((u) => { if (u && u.username) handleUserUpdate(u); })
+        .catch(() => {});
+    }
+    try {
+      const shared = new URLSearchParams(window.location.search).get("u");
+      if (shared && /^[A-Za-z0-9._]{1,30}$/.test(shared)) { setProfileName(shared.toLowerCase()); setPage("profile"); }
+    } catch { /* ignore */ }
+  }, []);
+
   const webrtc = useWebRTC();
   liveRef.current = { page, matchPhase };
   useEffect(() => {
@@ -1213,11 +1238,13 @@ export default function StrangerPlay() {
 
   // ── App frame wiring: AppShell talks in "nav keys", the app's pages have their own names ──
   const PAGE_OF_NAV = { home: "home", match: "play", live: "watchlive", golive: "golive", messages: "messages", rewards: "rewards", ranking: "ranks", profile: "profile", settings: "settings" };
-  const NAV_OF_PAGE = { home: "home", play: "match", gamescreen: "match", watchlive: "live", golive: "live", messages: "messages", rewards: "rewards", ranks: "ranking", profile: "profile", settings: "profile" };
+  const NAV_OF_PAGE = { home: "home", play: "match", gamescreen: "match", watchlive: "live", golive: "live", messages: "messages", rewards: "rewards", ranks: "ranking", profile: "profile", settings: "profile", login: "profile" };
+  // Open the login screen, remembering where to go back to. It stays INSIDE the app frame (bottom tabs / sidebar stay visible).
+  const goLogin = () => { setLoginFrom(page === "login" ? loginFrom : page); setPage("login"); };
   const navTo = (key) => { if (key === "profile") setProfileName(null); goTo(PAGE_OF_NAV[key] || key); };
   const searchPlayer = (name) => { setProfileName(name); goTo("profile"); };
   // The live call, games and the login page take the whole screen (no sidebar / top bar).
-  const bareFrame = (page === "play" && matchPhase === "connected") || page === "gamescreen" || page === "login";
+  const bareFrame = (page === "play" && matchPhase === "connected") || page === "gamescreen";
 
   const getDiag = async () => ({
     app: { page, matchPhase, socketConnected: socket.connected, loggedIn: !!localStorage.getItem("tz_token"), queueErr: queueErr || null,
@@ -1237,7 +1264,7 @@ export default function StrangerPlay() {
         page={NAV_OF_PAGE[page]}
         onNavigate={navTo}
         onSearch={searchPlayer}
-        onLogin={() => goTo("login")}
+        onLogin={goLogin}
         onLogout={handleLogout}
         online={liveCount}
         points={points}
@@ -1253,7 +1280,7 @@ export default function StrangerPlay() {
           online={liveCount}
           games={HOME_GAMES}
           onPlay={() => startSearch()}
-          onLogin={() => goTo("login")}
+          onLogin={goLogin}
           onNavigate={navTo}
         />
       )}
@@ -1324,7 +1351,7 @@ export default function StrangerPlay() {
                 <div style={{ background: tint(DS.live,"18"), border: `1px solid ${tint(DS.live,"44")}`, borderRadius: 10, padding: "10px 16px", fontSize: 12, color: DS.live, maxWidth: 280, textAlign: "center" }}>
                   {queueErr}
                   {!localStorage.getItem("tz_token") && (
-                    <div><button onClick={() => goTo("login")} style={{ marginTop: 8, background: "none", border: "none", color: DS.signal, cursor: "pointer", fontSize: 12, textDecoration: "underline" }}>Go to login</button></div>
+                    <div><button onClick={goLogin} style={{ marginTop: 8, background: "none", border: "none", color: DS.signal, cursor: "pointer", fontSize: 12, textDecoration: "underline" }}>Go to login</button></div>
                   )}
                 </div>
               )}
@@ -1736,7 +1763,7 @@ export default function StrangerPlay() {
 
       {/* BUG FIX #1 + #3: onLogin={handleLogin} passed, user+points forwarded */}
       {page === "login" && (
-        <LoginSignup onNavigate={goTo} onLogin={handleLogin} />
+        <LoginSignup onNavigate={(pg) => goTo(pg === "home" ? loginFrom : pg)} onBack={() => goTo(loginFrom)} onLogin={handleLogin} />
       )}
 
       {/* BUG FIX #3: user and points now passed to Profile */}
@@ -1745,15 +1772,17 @@ export default function StrangerPlay() {
           username={profileName || user?.username}
           me={user}
           token={localStorage.getItem("tz_token")}
-          onUserUpdate={handleLogin}
-          onPlay={() => goTo("play")}
+          games={HOME_GAMES}
+          onUserUpdate={handleUserUpdate}
+          onPlay={() => startSearch()}
+          onLogin={goLogin}
           onLogout={handleLogout}
-          onNavigate={goTo} user={user} points={points}
+          onSettings={() => goTo("settings")}
         />
       )}
 
       {page === "rewards"  && <Rewards  onNavigate={goTo} user={user} points={points} />}
-      {page === "settings" && <Settings onNavigate={navTo} user={user} token={localStorage.getItem("tz_token")} onLogout={handleLogout} onUserUpdate={handleLogin} theme={theme} onToggleTheme={toggleTheme} />}
+      {page === "settings" && <Settings onNavigate={navTo} user={user} token={localStorage.getItem("tz_token")} onLogout={handleLogout} onUserUpdate={handleUserUpdate} theme={theme} onToggleTheme={toggleTheme} />}
       {page === "messages" && <ComingSoon title="Messages are on the way" text="Soon you will be able to keep chatting with people you met on a call, even after it ends." onHome={() => goTo("home")} />}
 
       {/* GameScreen — only renders on real match */}

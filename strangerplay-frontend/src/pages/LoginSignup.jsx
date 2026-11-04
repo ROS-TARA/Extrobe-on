@@ -118,9 +118,9 @@ function Success({ mode, username, onNavigate }) {
 
 /* ══════════════════════════════════
    MAIN EXPORT
-   Props: onNavigate(page), onLogin(user)
+   Props: onNavigate(page), onLogin(user), onBack()  — onBack returns to where the person came from
 ══════════════════════════════════ */
-export default function LoginSignup({ onNavigate, onLogin }) {
+export default function LoginSignup({ onNavigate, onLogin, onBack }) {
   const API = import.meta.env.VITE_API_URL || "http://localhost:3001";
 
   const [mode, setMode] = useState("login");
@@ -214,8 +214,19 @@ export default function LoginSignup({ onNavigate, onLogin }) {
   return (
     <>
       <style>{css}</style>
-      <div style={{ minHeight: "100dvh", background: DS.void, display: "flex", alignItems: "center", justifyContent: "center", padding: "24px 16px" }}>
+      {/* sits inside the app frame now (sidebar / bottom tabs stay visible), so it only needs a normal page height */}
+      <div style={{ minHeight: "min(780px, calc(100dvh - 170px))", display: "flex", alignItems: "center", justifyContent: "center", padding: "8px 4px 24px" }}>
         <div style={{ width: "100%", maxWidth: 400, animation: "sp-enter 0.25s ease" }}>
+
+          {/* Back — you can always leave without signing in */}
+          <button
+            onClick={() => (onBack ? onBack() : onNavigate?.("home"))}
+            aria-label="Go back"
+            style={{ display: "inline-flex", alignItems: "center", gap: 6, margin: "0 0 14px", padding: "8px 14px 8px 10px", border: `1px solid ${DS.rim}`, borderRadius: 999, background: DS.surface, color: DS.ash, fontSize: 14, fontWeight: 600, cursor: "pointer" }}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
+            Back
+          </button>
 
           {/* Brand / logo */}
           <div style={{ textAlign: "center", marginBottom: 28 }}>
