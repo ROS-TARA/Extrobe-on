@@ -1,9 +1,11 @@
 /*
   Profile.jsx — the "Player Card".
 
-  Your profile is your game identity, not a feed of posts: a card in a colour you choose,
-  your photo inside a RANK RING that fills as you earn points, your real stats, a rank
-  journey, achievements unlocked from your real numbers, and your recent matches.
+  Instagram-style layout: your photo (inside a RANK RING that fills as you earn points) on the left,
+  your real stats on the right, your name directly under the photo, then bio, tags, rank journey,
+  achievements and recent matches. Your colour choice tints the ring and the tags.
+  Edit profile / Share card live in the ☰ menu of the top bar (AppShell) and arrive here through
+  the `action` prop.
 
   Everything you change (photo, name, bio, country, flag, vibe tags, favourite game,
   card colour, social handles) is saved on the server, so it is the same on every device
@@ -19,8 +21,7 @@
     onUserUpdate  fn(user)  called after a save — put the new user into app state
     onPlay        fn        "Find a stranger"
     onLogin       fn        guests are sent to sign in
-    onLogout      fn?       shows a Log out button on your own card
-    onSettings    fn?       shows a Settings button on your own card
+    action        {type:"edit"|"share", n:number}?  sent by the ☰ menu; a new object = do it now
     onMessage     fn(username)?  "Message" button on other players' cards
 */
 import { useEffect, useRef, useState } from "react";
@@ -132,9 +133,9 @@ function RankRing({ user }) {
   const R = 74, C = 2 * Math.PI * R;
   return (
     <div className="tpf-ring" role="img" aria-label={`${cur.name}, ${Math.round(frac * 100)}% of the way to the next rank`}>
-      <svg viewBox="0 0 164 164" width="164" height="164" aria-hidden="true">
-        <circle cx="82" cy="82" r={R} fill="none" stroke="rgba(255,255,255,.25)" strokeWidth="6" />
-        <circle cx="82" cy="82" r={R} fill="none" stroke="#fff" strokeWidth="6" strokeLinecap="round"
+      <svg viewBox="0 0 164 164" aria-hidden="true">
+        <circle cx="82" cy="82" r={R} fill="none" stroke="var(--sp-rim)" strokeWidth="7" />
+        <circle cx="82" cy="82" r={R} fill="none" stroke="var(--tpf-accent)" strokeWidth="7" strokeLinecap="round"
           strokeDasharray={`${C * frac} ${C}`} transform="rotate(-90 82 82)" />
       </svg>
       <div className="tpf-ring-in"><Avatar user={user} size={136} /></div>
@@ -148,7 +149,7 @@ const Ic = ({ children, size = 18 }) => (
 );
 
 /* ═══════════════════════════════ page ═══════════════════════════════ */
-export default function Profile({ username, me, token, games = [], onUserUpdate, onPlay, onLogin, onLogout, onSettings, onMessage }) {
+export default function Profile({ username, me, token, games = [], onUserUpdate, onPlay, onLogin, onMessage, action }) {
   const isMe = !!(me && username && me.username === String(username).toLowerCase());
   const [other, setOther] = useState(null);
   const [status, setStatus] = useState(isMe ? "ok" : "loading");
@@ -160,6 +161,16 @@ export default function Profile({ username, me, token, games = [], onUserUpdate,
   useEffect(() => () => clearTimeout(toastT.current), []);
 
   const p = isMe ? me : other;
+
+  // The ☰ menu in the top bar sends actions. Only react to NEW ones (ignore whatever was there when this page opened).
+  const lastAction = useRef(action);
+  useEffect(() => {
+    if (!action || action === lastAction.current) return;
+    lastAction.current = action;
+    if (!isMe) return;
+    if (action.type === "edit") setEditing(true);
+    if (action.type === "share") share();
+  }); // eslint-disable-line
 
   // someone else's card (public data — no email, no coins)
   useEffect(() => {
@@ -201,40 +212,36 @@ export default function Profile({ username, me, token, games = [], onUserUpdate,
   const info = rankInfo(p.points || 0);
   const winRate = p.gamesPlayed > 0 ? Math.round((p.wins / p.gamesPlayed) * 100) + "%" : "—";
   const theme = THEMES[p.theme] || THEMES.ocean;
+  const accent = (theme.bg.match(/#[0-9a-fA-F]{6}/) || ["#1877f2"])[0];   // first colour of the chosen card theme
   const fav = p.favGame ? games.find((g) => g.title === p.favGame) : null;
   const links = SOCIALS.filter((s) => p.socialLinks && HANDLE.test(p.socialLinks[s.key] || ""));
   const stats = [["Games", p.gamesPlayed || 0], ["Wins", p.wins || 0], ["Win rate", winRate], ["Points", (p.points || 0).toLocaleString()]];
 
   return (
-    <div className="tpf">
+    <div className="tpf" style={{ "--tpf-accent": accent }}>
       <style>{CSS}</style>
 
-      {/* ── the card ── */}
-      <section className="tpf-card" style={{ background: theme.bg }}>
-        <RankRing user={p} />
+      {/* ── header: photo left, stats right, name under the photo ── */}
+      <section className="tpf-head">
+        <div className="tpf-top">
+          <RankRing user={p} />
+          <div className="tpf-stats" aria-label="Stats">
+            {stats.map(([k, v]) => <div key={k}><b>{v}</b><span>{k}</span></div>)}
+          </div>
+        </div>
+
         <h1 className="tpf-name">{p.name || p.username}</h1>
         <p className="tpf-handle">@{p.username}<span> · </span>{p.flag || "🌍"} {p.country || "Earth"}</p>
-        {p.bio ? <p className="tpf-bio">{p.bio}</p> : isMe ? <p className="tpf-bio tpf-dim">Add a short bio so people know who you are.</p> : null}
+        {p.bio ? <p className="tpf-bio">{p.bio}</p> : isMe ? <p className="tpf-bio tpf-dim">No bio yet. Add one from the ☰ menu → Edit profile.</p> : null}
         {p.tags && p.tags.length > 0 && <div className="tpf-tags">{p.tags.map((t) => <span key={t}>{t}</span>)}</div>}
-        <div className="tpf-actions">
-          {isMe ? (
-            <>
-              <button className="tpf-btn tpf-white" onClick={() => setEditing(true)}><Ic><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></Ic>Edit profile</button>
-              <button className="tpf-btn tpf-glass" onClick={share}><Ic><circle cx="18" cy="5" r="3" /><circle cx="6" cy="12" r="3" /><circle cx="18" cy="19" r="3" /><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4" /></Ic>Share card</button>
-            </>
-          ) : (
-            <>
-              {me && onMessage && <button className="tpf-btn tpf-white" onClick={() => onMessage(p.username)}><Ic><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-4.6A8 8 0 1 1 21 12z" /></Ic>Message</button>}
-              <button className={`tpf-btn ${me && onMessage ? "tpf-glass" : "tpf-white"}`} onClick={me ? onPlay : onLogin}>{me ? "Find a stranger" : "Sign in to play"}</button>
-              <button className="tpf-btn tpf-glass" onClick={share}>Share</button>
-            </>
-          )}
-        </div>
-      </section>
 
-      {/* ── stats ── */}
-      <section className="tpf-stats" aria-label="Stats">
-        {stats.map(([k, v]) => <div key={k}><b>{v}</b><span>{k}</span></div>)}
+        {!isMe && (
+          <div className="tpf-actions">
+            {me && onMessage && <button className="tpf-btn tpf-solid" onClick={() => onMessage(p.username)}><Ic><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-4.6A8 8 0 1 1 21 12z" /></Ic>Message</button>}
+            <button className={`tpf-btn ${me && onMessage ? "tpf-ghost" : "tpf-solid"}`} onClick={me ? onPlay : onLogin}>{me ? "Find a stranger" : "Sign in to play"}</button>
+            <button className="tpf-btn tpf-ghost" onClick={share}>Share</button>
+          </div>
+        )}
       </section>
 
       {/* ── rank journey ── */}
@@ -300,13 +307,6 @@ export default function Profile({ username, me, token, games = [], onUserUpdate,
               })}
             </ul>
           )}
-        </section>
-      )}
-
-      {isMe && (onSettings || onLogout) && (
-        <section className="tpf-foot">
-          {onSettings && <button className="tpf-btn tpf-ghost" onClick={onSettings}>Settings</button>}
-          {onLogout && <button className="tpf-btn tpf-ghost tpf-danger" onClick={onLogout}>Log out</button>}
         </section>
       )}
 
@@ -468,36 +468,33 @@ const CSS = `
 .tpf-msg h2{margin:0 0 8px;color:var(--sp-plat);font-family:'Space Grotesk',sans-serif;font-size:24px}
 .tpf-msg p{margin:0 0 18px}
 
-.tpf-card{position:relative;display:flex;flex-direction:column;align-items:center;padding:34px 22px 24px;border-radius:20px;color:#fff;text-align:center;overflow:hidden}
-.tpf-card::after{content:"";position:absolute;inset:0;background:radial-gradient(120% 70% at 50% 0,rgba(255,255,255,.18),transparent 60%);pointer-events:none}
-.tpf-card>*{position:relative;z-index:1}
-.tpf-ring{position:relative;width:164px;height:164px;margin-bottom:12px}
-.tpf-ring svg{position:absolute;inset:0}
-.tpf-ring-in{position:absolute;inset:14px;border-radius:50%;overflow:hidden;background:rgba(255,255,255,.2);box-shadow:0 0 0 4px rgba(255,255,255,.18)}
+.tpf{--tpf-accent:var(--sp-signal)}
+.tpf-head{padding:6px 2px 20px}
+.tpf-top{display:flex;align-items:center;gap:20px}
+.tpf-ring{--ring:96px;position:relative;flex:none;width:var(--ring);height:var(--ring);margin-bottom:12px}
+.tpf-ring svg{position:absolute;inset:0;width:100%;height:100%}
+.tpf-ring-in{position:absolute;inset:9%;border-radius:50%;overflow:hidden;background:var(--sp-surface2)}
 .tpf-ph{display:block;width:100%;height:100%;object-fit:cover;border-radius:50%}
-.tpf-ini{display:grid;place-items:center;background:rgba(255,255,255,.22);color:#fff;font-weight:700;font-family:'Space Grotesk',sans-serif}
-.tpf-rankpill{position:absolute;left:50%;bottom:-6px;transform:translateX(-50%);padding:5px 14px;border-radius:999px;background:#fff;color:#111;font-size:12px;font-weight:700;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.25)}
-.tpf-name{margin:12px 0 2px;font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:30px;letter-spacing:-.6px;line-height:1.1;overflow-wrap:anywhere}
-.tpf-handle{margin:0;font-size:14px;color:rgba(255,255,255,.85)}
+.tpf-ini{display:grid;place-items:center;background:color-mix(in srgb,var(--tpf-accent) 16%,var(--sp-surface2));color:var(--tpf-accent);font-weight:700;font-family:'Space Grotesk',sans-serif}
+.tpf-rankpill{position:absolute;left:50%;bottom:-9px;transform:translateX(-50%);padding:3px 10px;border:2px solid var(--sp-void);border-radius:999px;background:var(--tpf-accent);color:#fff;font-size:11px;font-weight:700;white-space:nowrap}
+.tpf-stats{flex:1;min-width:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;text-align:center}
+.tpf-stats div{display:flex;flex-direction:column;gap:1px;padding:4px 0}
+.tpf-stats b{font-size:18px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.2}
+.tpf-stats span{color:var(--sp-ash);font-size:12px}
+.tpf-name{margin:0;font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:20px;letter-spacing:-.2px;line-height:1.2;overflow-wrap:anywhere}
+.tpf-handle{margin:2px 0 0;color:var(--sp-ash);font-size:14px}
 .tpf-handle span{opacity:.6}
-.tpf-bio{max-width:46ch;margin:12px 0 0;font-size:15px;line-height:1.5;color:rgba(255,255,255,.95);overflow-wrap:anywhere}
-.tpf-dim{color:rgba(255,255,255,.7)}
-.tpf-tags{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-top:14px}
-.tpf-tags span{padding:5px 12px;border-radius:999px;background:rgba(255,255,255,.18);font-size:13px;font-weight:600}
-.tpf-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:10px;margin-top:20px}
+.tpf-bio{max-width:52ch;margin:10px 0 0;font-size:14.5px;line-height:1.5;overflow-wrap:anywhere}
+.tpf-dim{color:var(--sp-ash)}
+.tpf-tags{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.tpf-tags span{padding:5px 12px;border-radius:999px;background:color-mix(in srgb,var(--tpf-accent) 12%,transparent);color:var(--tpf-accent);font-size:13px;font-weight:600}
+.tpf-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}.tpf-actions .tpf-btn{flex:1 1 0;min-width:110px}
+@media (min-width:640px){.tpf-ring{--ring:136px}.tpf-top{gap:36px}.tpf-stats b{font-size:24px}.tpf-name{font-size:24px}.tpf-handle{font-size:15px}}
 
 .tpf-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:10px 18px;border:0;border-radius:8px;font-size:14px;font-weight:600;transition:background .15s,opacity .15s}
 .tpf-btn:disabled{opacity:.55;cursor:not-allowed}
-.tpf .tpf-white{background:#fff;color:#111}.tpf .tpf-white:hover{background:#f0f2f5}
-.tpf .tpf-glass{background:rgba(255,255,255,.2);color:#fff}.tpf .tpf-glass:hover{background:rgba(255,255,255,.3)}
 .tpf .tpf-solid,.tpf-sheet .tpf-solid{background:var(--sp-signal);color:#fff}.tpf .tpf-solid:hover:not(:disabled),.tpf-sheet .tpf-solid:hover:not(:disabled){background:color-mix(in srgb,var(--sp-signal) 88%,#000)}
 .tpf .tpf-ghost,.tpf-sheet .tpf-ghost{background:var(--sp-surface2);color:var(--sp-plat);border:1px solid var(--sp-rim)}.tpf .tpf-ghost:hover:not(:disabled),.tpf-sheet .tpf-ghost:hover:not(:disabled){background:var(--sp-rim)}
-.tpf .tpf-danger{color:var(--sp-live)}
-
-.tpf-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:12px}
-.tpf-stats div{display:flex;flex-direction:column;gap:2px;padding:14px 10px;border:1px solid var(--sp-rim);border-radius:14px;background:var(--sp-surface);text-align:center}
-.tpf-stats b{font-size:22px;font-weight:700;font-variant-numeric:tabular-nums}
-.tpf-stats span{color:var(--sp-ash);font-size:12px}
 
 .tpf-sec{margin-top:12px;padding:18px;border:1px solid var(--sp-rim);border-radius:16px;background:var(--sp-surface)}
 .tpf-sec h2{display:flex;align-items:baseline;gap:10px;margin:0 0 14px;font-family:'Space Grotesk',sans-serif;font-size:17px;font-weight:700}
@@ -534,7 +531,6 @@ a.tpf-chip:hover{border-color:var(--sp-signal)}
 .tpf-opp{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tpf-meta{color:var(--sp-ash);font-size:12px;white-space:nowrap}
 .tpf-empty{text-align:center;padding:10px 0;color:var(--sp-ash)}.tpf-empty p{margin:0 0 12px}
-.tpf-foot{display:flex;gap:10px;margin-top:12px}.tpf-foot .tpf-btn{flex:1}
 .tpf-toast{position:fixed;left:50%;bottom:calc(90px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:90;padding:11px 18px;border-radius:999px;background:#242526;color:#fff;font-size:14px;font-weight:600;box-shadow:0 6px 20px rgba(0,0,0,.3)}
 
 /* edit sheet */
@@ -568,5 +564,5 @@ a.tpf-chip:hover{border-color:var(--sp-signal)}
 .tpf button:focus-visible,.tpf-sheet button:focus-visible,.tpf a:focus-visible{outline:2px solid var(--sp-signal);outline-offset:2px}
 
 @media (min-width:700px){.tpf-back{align-items:center}.tpf-sheet{border-radius:22px;border-bottom:1px solid var(--sp-rim)}}
-@media (max-width:480px){.tpf-card{padding:28px 16px 20px}.tpf-name{font-size:26px}.tpf-stats b{font-size:19px}.tpf-matches li{grid-template-columns:52px 1fr}.tpf-meta{grid-column:2}}
+@media (max-width:480px){.tpf-matches li{grid-template-columns:52px 1fr}.tpf-meta{grid-column:2}}
 `;

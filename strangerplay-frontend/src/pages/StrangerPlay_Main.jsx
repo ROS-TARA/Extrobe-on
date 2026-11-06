@@ -1047,6 +1047,7 @@ export default function StrangerPlay() {
   const liveRef = useRef({ page: "home", matchPhase: "idle" });
   const [profileName, setProfileName] = useState(null);   // null = my own profile, else the player that was searched
   const [unreadDm, setUnreadDm] = useState(0);              // unread messages (shown as a badge)
+  const [profileAction, setProfileAction] = useState(null);  // {type:"edit"|"share", n} sent from the ☰ menu to the Profile page
   const [chatWith, setChatWith] = useState(null);             // open this chat as soon as the Messages page shows
   const [loginFrom, setLoginFrom] = useState("home");        // page to return to from the login screen (Back / after signing in)
   const [proposedGame, setProposedGame] = useState(null);  // game the other side proposed
@@ -1256,6 +1257,8 @@ export default function StrangerPlay() {
   // "In a call" = searching or connected. Both use the same full-screen stage so NEXT feels seamless.
   const inCall = matchPhase === "searching" || matchPhase === "connected";
   const bareFrame = (page === "play" && inCall) || page === "gamescreen";
+  // True only while I am looking at MY OWN profile (the ☰ menu in the top bar shows only then).
+  const ownProfile = page === "profile" && !!user && (!profileName || String(profileName).toLowerCase() === user.username);
 
   const getDiag = async () => ({
     app: { page, matchPhase, socketConnected: socket.connected, loggedIn: !!localStorage.getItem("tz_token"), queueErr: queueErr || null,
@@ -1284,6 +1287,17 @@ export default function StrangerPlay() {
         onToggleTheme={toggleTheme}
         badges={{ messages: unreadDm }}
         bare={bareFrame}
+        profileMenu={ownProfile ? {
+          onEdit: () => setProfileAction({ type: "edit", n: Date.now() }),
+          onShare: () => setProfileAction({ type: "share", n: Date.now() }),
+        } : null}
+        notifications={unreadDm > 0 ? [{
+          id: "dm",
+          text: unreadDm === 1 ? "1 unread message" : `${unreadDm} unread messages`,
+          sub: "Tap to open Messages",
+          count: unreadDm,
+          onClick: () => navTo("messages"),
+        }] : []}
       >
       {page === "home" && (
         <Home
@@ -1476,8 +1490,7 @@ export default function StrangerPlay() {
           onUserUpdate={handleUserUpdate}
           onPlay={() => startSearch()}
           onLogin={goLogin}
-          onLogout={handleLogout}
-          onSettings={() => goTo("settings")}
+          action={profileAction}
           onMessage={(u) => { setChatWith(u); goTo("messages"); }}
         />
       )}
