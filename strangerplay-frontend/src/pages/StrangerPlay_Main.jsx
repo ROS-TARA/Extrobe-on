@@ -9,6 +9,7 @@ import LoginSignup from "./LoginSignup";
 import Rewards from "./Rewards";
 import Settings from "./Settings";
 import GameScreen from "./GameScreen";
+import CallScreen from "./CallScreen";
 import { tint } from "./theme";
 
 /* ─────────────────────────────────────────────────────────────
@@ -954,6 +955,16 @@ const HOME_GAMES = [
   { emoji: "📖", title: "Finish My Story",desc: "One starts a story. The other ends it live.",            pts: 15, color: "#ff9f43" },
 ];
 
+// Games a player can propose during a call (same ids the server already understands).
+const CALL_GAMES = [
+  { id: "dontlaugh",     emoji: "😐", label: "Don't Laugh" },
+  { id: "vibecheck",     emoji: "🎭", label: "Vibe Check"  },
+  { id: "mirrorme",      emoji: "🪞", label: "Mirror Me"   },
+  { id: "hottake",       emoji: "🌶️", label: "Hot Take"    },
+  { id: "echo",          emoji: "🔊", label: "Echo"        },
+  { id: "finishmystory", emoji: "📖", label: "Story"       },
+];
+
 export default function StrangerPlay() {
   const [page, setPage] = useState("home");
 
@@ -1245,7 +1256,9 @@ export default function StrangerPlay() {
   const navTo = (key) => { if (key === "profile") setProfileName(null); goTo(PAGE_OF_NAV[key] || key); };
   const searchPlayer = (name) => { setProfileName(name); goTo("profile"); };
   // The live call, games and the login page take the whole screen (no sidebar / top bar).
-  const bareFrame = (page === "play" && matchPhase === "connected") || page === "gamescreen";
+  // "In a call" = searching or connected. Both use the same full-screen stage so NEXT feels seamless.
+  const inCall = matchPhase === "searching" || matchPhase === "connected";
+  const bareFrame = (page === "play" && inCall) || page === "gamescreen";
 
   const getDiag = async () => ({
     app: { page, matchPhase, socketConnected: socket.connected, loggedIn: !!localStorage.getItem("tz_token"), queueErr: queueErr || null,
@@ -1305,7 +1318,7 @@ export default function StrangerPlay() {
           PLAY — matchmaking + live call
       ══════════════════════════════ */}
       {page === "play" && (
-        <div data-sp-scope={matchPhase === "connected" ? "dark" : undefined} style={matchPhase === "connected"
+        <div data-sp-scope={inCall ? "dark" : undefined} style={inCall
           ? { position: "fixed", inset: 0, zIndex: 10, background: "#000" }
           : { position: "relative", height: "min(780px, calc(100dvh - 150px))", minHeight: 520, maxWidth: 980, margin: "0 auto", overflow: "auto", border: `1px solid ${DS.rim}`, borderRadius: 24, background: DS.void }}>
 
@@ -1378,353 +1391,39 @@ export default function StrangerPlay() {
             </div>
           )}
 
-          {/* ── SEARCHING ── */}
-          {matchPhase === "searching" && (
-            <div style={{
-              display: "flex", flexDirection: "column", alignItems: "center",
-              justifyContent: "center", height: "100%", gap: 24,
-              background: DS.void,
-            }}>
-              <div style={{ position: "relative", width: 100, height: 100 }}>
-                <div style={{ position: "absolute", inset: 0, borderRadius: "50%", border: `3px solid ${DS.rim}`, borderTopColor: DS.signal, animation: "sp-spin 1s linear infinite" }} />
-                <div style={{ position: "absolute", inset: 14, borderRadius: "50%", background: DS.surface, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 2 }}>
-                  <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 16, color: DS.gold }}>{queueTime}s</div>
-                </div>
-              </div>
-              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: "clamp(22px,5vw,34px)", textAlign: "center" }}>
-                Finding your <Signal>match</Signal>
-              </div>
-              <div style={{ color: DS.ash, fontFamily: "'JetBrains Mono', monospace", fontSize: 11, textAlign: "center" }}>
-                {liveCount} online · searching...
-              </div>
-              <button className="sp-btn-ghost" style={{ padding: "10px 28px" }} onClick={cancelSearch}>Cancel</button>
-            </div>
-          )}
-
-          {/* ── CONNECTED — split screen call ── */}
-          {matchPhase === "connected" && matchInfo && (
-            <div style={{
-              position: "absolute", inset: 0,
-              display: "flex", flexDirection: "column",
-              // No top nav, no bottom nav — full screen call takes everything
-            }}>
-              {/*
-                SPLIT SCREEN LAYOUT
-                ─────────────────────────────────────────
-                TOP 50% — STRANGER
-                Bottom 50% — YOU
-                ─────────────────────────────────────────
-                This is the standard Omegle/OmeTV layout.
-                Both people feel present. No one is hidden.
-                PiP (corner) feels like messenger — split
-                screen feels like a real face-to-face call.
-              */}
-
-              {/* ── TOP HALF — STRANGER ── */}
-              <div style={{ flex: 1, position: "relative", background: DS.void, overflow: "hidden" }}>
-                {webrtc.remoteConnected ? (
-                  /*
-                    WHY REF CALLBACK NOT useRef directly:
-                    This video element is conditionally rendered — it doesn't exist until
-                    remoteConnected=true. But pc.ontrack fires BEFORE this element mounts.
-                    If we use ref={webrtc.remoteRef}, srcObject was already assigned to null.
-                    The ref callback fires on mount and immediately picks up remoteStreamRef,
-                    which was stored in ontrack even though the element wasn't ready yet.
-                  */
-                  <video
-                    ref={webrtc.attachRemote}
-                    autoPlay playsInline
-                    style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-                  />
-                ) : (
-                  <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16, background: DS.void }}>
-                    {!opponentLeft ? (
-                      <>
-                        <div style={{ position: "relative", width: 56, height: 56 }}>
-                          <div style={{ position: "absolute", inset: 0, borderRadius: "50%", border: `3px solid ${DS.rim}`, borderTopColor: DS.signal, animation: "sp-spin 1s linear infinite" }} />
-                          <div style={{ position: "absolute", inset: 12, borderRadius: "50%", background: DS.surface, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                            <span style={{ fontSize: 13 }}>{matchInfo.opponent?.flag || "🌍"}</span>
-                          </div>
-                        </div>
-                        <div style={{ textAlign: "center" }}>
-                          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: DS.signal, letterSpacing: 3, textTransform: "uppercase", marginBottom: 6 }}>CONNECTING</div>
-                          <div style={{ fontSize: 11, color: DS.ghost, lineHeight: 1.6 }}>
-                            {matchInfo.opponent?.username || "stranger"} · up to 25s on different networks
-                          </div>
-                          {webrtc.callState.detail && (
-                            <div style={{ marginTop: 8, fontSize: 11, lineHeight: 1.5, maxWidth: 280, fontFamily: "'JetBrains Mono', monospace",
-                              color: webrtc.callState.phase === "failed" ? DS.live : DS.ash }}>
-                              {webrtc.callState.detail}
-                              {webrtc.callState.phase === "failed" && <div style={{ marginTop: 4, color: DS.ghost }}>tap NEXT to try someone else</div>}
-                            </div>
-                          )}
-                        </div>
-                      </>
-                    ) : (
-                      <>
-                        <div style={{ fontFamily: "'Space Grotesk', sans-serif",  fontSize: 28, color: DS.ash }}>They left.</div>
-                        <div style={{ fontSize: 11, color: DS.ghost, fontFamily: "'JetBrains Mono', monospace" }}>tap NEXT for another</div>
-                      </>
-                    )}
-                  </div>
-                )}
-
-                {webrtc.remoteConnected && webrtc.remoteBlocked && (
-                  <button onClick={webrtc.unmuteRemote} style={{
-                    position: "absolute", bottom: 14, left: "50%", transform: "translateX(-50%)", zIndex: 6,
-                    background: DS.signal, color: DS.void, border: "none", borderRadius: 20,
-                    padding: "8px 16px", fontSize: 12, fontWeight: 700, cursor: "pointer",
-                  }}>🔇 Tap to hear them</button>
-                )}
-
-                {/* Stranger credential — top left */}
-                <div style={{ position: "absolute", top: 14, left: 14, zIndex: 5 }}>
-                  <div style={{
-                    background: tint(DS.void,"c0"), backdropFilter: "blur(12px)",
-                    border: `1px solid ${DS.rim}`, borderRadius: 10, padding: "5px 12px",
-                    display: "flex", alignItems: "center", gap: 7,
-                  }}>
-                    <span style={{ fontSize: 13 }}>{matchInfo.opponent?.flag || "🌍"}</span>
-                    <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, color: DS.plat, letterSpacing: 0.3 }}>
-                      {matchInfo.opponent?.username || "stranger"}
-                    </span>
-                    {webrtc.remoteConnected && (
-                      <span style={{ width: 5, height: 5, borderRadius: "50%", background: DS.ice, flexShrink: 0 }} />
-                    )}
-                    {webrtc.callState.phase === "connected" && webrtc.callState.route && webrtc.callState.route !== "unknown" && (
-                      <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, color: DS.ghost }}>{webrtc.callState.route}</span>
-                    )}
-                  </div>
-                </div>
-
-                {/* Points on the line — top right */}
-                <div style={{ position: "absolute", top: 14, right: 14, zIndex: 5 }}>
-                  <div style={{
-                    background: tint(DS.void,"c0"), backdropFilter: "blur(12px)",
-                    border: `1px solid ${DS.rim}`, borderRadius: 10, padding: "4px 10px",
-                    fontFamily: "'JetBrains Mono', monospace", fontSize: 9.5, color: DS.ash, letterSpacing: 1.5,
-                  }}>STRANGER</div>
-                </div>
-              </div>
-
-              {/* ── DIVIDER — flat, no glow ── */}
-              <div style={{
-                height: 1, flexShrink: 0, background: DS.rim,
-                position: "relative", zIndex: 6,
-              }}>
-                {/* Center dot — like a perforation hole on a ticket */}
-                <div style={{
-                  position: "absolute", left: "50%", top: "50%",
-                  transform: "translate(-50%,-50%)",
-                  width: 28, height: 28, borderRadius: "50%",
-                  background: DS.void, border: `1px solid ${DS.rim}`,
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                }}>
-                  <div style={{ width: 6, height: 6, borderRadius: "50%", background: DS.signal }} />
-                </div>
-              </div>
-
-              {/* ── BOTTOM HALF — YOU ── */}
-              <div style={{ flex: 1, position: "relative", background: DS.surface2, overflow: "hidden" }}>
-                {/*
-                  LOCAL VIDEO REF CALLBACK:
-                  When matchPhase switches idle→connected, React unmounts the idle
-                  <video> and mounts this new one. stream state hasn't changed, so
-                  useEffect([stream]) does NOT re-fire — new element never gets
-                  srcObject. The ref callback fires on every mount and immediately
-                  assigns the stream. This is the real fix for the black camera.
-                */}
-                <video
-                  ref={el => { webrtc.localRef.current = el; if (el && webrtc.stream) { el.srcObject = webrtc.stream; el.play().catch(() => {}); } }}
-                  autoPlay muted playsInline
-                  style={{ width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)", display: "block" }}
-                />
-
-                {/* Camera off overlay */}
-                {webrtc.camOff && (
-                  <div style={{ position: "absolute", inset: 0, background: DS.surface2, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                    <span style={{ fontSize: 28, color: DS.ghost }}>📷</span>
-                  </div>
-                )}
-
-                {/* YOU label — top left */}
-                <div style={{ position: "absolute", top: 14, left: 14, zIndex: 5 }}>
-                  <div style={{
-                    background: tint(DS.void,"c0"), backdropFilter: "blur(12px)", borderRadius: 10,
-                    border: `1px dashed ${DS.rim}`, padding: "4px 10px",
-                    fontFamily: "'JetBrains Mono', monospace", fontSize: 9.5, color: DS.ash, letterSpacing: 1.5,
-                  }}>YOU</div>
-                </div>
-
-                {/* ── BOTTOM OVERLAY — game pills + controls ──
-                    Lives INSIDE the bottom half, not fixed to screen bottom.
-                    This is what prevents the bottom nav from covering it —
-                    the nav is hidden during calls (see nav condition), and
-                    these controls fill the freed space naturally.
-                */}
-                <div style={{
-                  position: "absolute", bottom: 0, left: 0, right: 0, zIndex: 10,
-                  padding: "0 16px 16px",
-                  background: `linear-gradient(to top, ${tint(DS.void,"f0")} 0%, ${tint(DS.void,"99")} 60%, transparent 100%)`,
-                }}>
-
-                  {/* Game pills — horizontal scroll on small screens */}
-                  <div style={{ marginBottom: 12, overflowX: "auto", paddingBottom: 2 }}>
-                    <div style={{ display: "flex", gap: 7, width: "max-content" }}>
-                      {[
-                        { id: "dontlaugh",     emoji: "😐", label: "Don't Laugh" },
-                        { id: "vibecheck",     emoji: "🎭", label: "Vibe Check"  },
-                        { id: "mirrorme",      emoji: "🪞", label: "Mirror Me"   },
-                        { id: "hottake",       emoji: "🌶️", label: "Hot Take"    },
-                        { id: "echo",          emoji: "🔊", label: "Echo"        },
-                        { id: "finishmystory", emoji: "📖", label: "Story"       },
-                      ].map(g => (
-                        <button
-                          key={g.id}
-                          onClick={() => socket.emit("proposeGame", { roomId: matchInfo.roomId, game: g.id })}
-                          style={{
-                            background: DS.surface,
-                            border: `1px dashed ${DS.rimHov}`,
-                            padding: "6px 13px",
-                            color: DS.plat, fontSize: 11,
-                            fontFamily: "'JetBrains Mono', monospace", letterSpacing: 0.3,
-                            cursor: "pointer", whiteSpace: "nowrap",
-                            transition: "border-color 0.15s, color 0.15s",
-                          }}
-                          onMouseEnter={e => { e.currentTarget.style.borderColor = DS.signal; e.currentTarget.style.color = DS.signal; }}
-                          onMouseLeave={e => { e.currentTarget.style.borderColor = DS.rimHov; e.currentTarget.style.color = DS.plat; }}
-                        >
-                          {g.emoji} {g.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Controls row */}
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, justifyContent: "center" }}>
-
-                    {/* Mute */}
-                    <button onClick={webrtc.toggleMute} title={webrtc.muted ? "Unmute" : "Mute"} style={{
-                      width: 42, height: 42,
-                      background: webrtc.muted ? DS.live : DS.surface,
-                      border: `1px solid ${webrtc.muted ? DS.live : DS.rim}`,
-                      cursor: "pointer", fontSize: 16, flexShrink: 0,
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                    }}>
-                      {webrtc.muted ? "🔇" : "🎤"}
-                    </button>
-
-                    {/* Cam */}
-                    <button onClick={webrtc.toggleCam} title={webrtc.camOff ? "Show camera" : "Hide camera"} style={{
-                      width: 42, height: 42,
-                      background: webrtc.camOff ? DS.live : DS.surface,
-                      border: `1px solid ${webrtc.camOff ? DS.live : DS.rim}`,
-                      cursor: "pointer", fontSize: 16, flexShrink: 0,
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                    }}>
-                      {webrtc.camOff ? "🚫" : "📷"}
-                    </button>
-
-                    {/*
-                      NEXT — brass/signal color. This is the primary call action.
-                      Pressing NEXT = skip to a new random stranger immediately.
-                      NOT a red hang-up. The verb is "next", not "end".
-                    */}
-                    <button
-                      onClick={() => {
-                        socket.emit("match:leave", { roomId: matchInfo.roomId });
-                        webrtc.closePeer();
-                        startSearch(); // straight back into matchmaking
-                      }}
-                      style={{
-                        height: 42, padding: "0 28px",
-                        background: DS.signal, border: "none", cursor: "pointer",
-                        fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, 
-                        fontSize: 14, color: DS.void, letterSpacing: 0.3,
-                        flexShrink: 0,
-                        transition: "transform 0.15s, box-shadow 0.15s",
-                      }}
-                      onMouseEnter={e => { e.currentTarget.style.filter = "brightness(1.08)"; }}
-                      onMouseLeave={e => { e.currentTarget.style.filter = "none"; }}
-                    >
-                      NEXT →
-                    </button>
-
-                    {/* End — small, ghost style, secondary action */}
-                    <button
-                      onClick={() => {
-                        socket.emit("match:leave", { roomId: matchInfo.roomId });
-                        webrtc.closePeer();
-                        setMatchPhase("idle");
-                        setMatchInfo(null);
-                        setOpponentLeft(false);
-                      }}
-                      title="End call"
-                      style={{
-                        width: 42, height: 42, background: DS.surface,
-                        border: `1px solid ${DS.rim}`, cursor: "pointer",
-                        fontSize: 15, color: DS.ash, flexShrink: 0,
-                        display: "flex", alignItems: "center", justifyContent: "center",
-                        transition: "border-color 0.15s, color 0.15s",
-                      }}
-                      onMouseEnter={e => { e.currentTarget.style.borderColor = DS.live; e.currentTarget.style.color = DS.live; }}
-                      onMouseLeave={e => { e.currentTarget.style.borderColor = DS.rim; e.currentTarget.style.color = DS.ash; }}
-                    >
-                      ✕
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {/* ── GAME PROPOSAL TOAST ── */}
-              {proposedGame && !gameAccepted && (
-                <div style={{
-                  position: "absolute", top: "50%", left: "50%",
-                  transform: "translate(-50%, -50%)",
-                  background: "rgba(0,0,0,0.9)", backdropFilter: "blur(16px)",
-                  border: `1px solid ${tint(DS.signal,"66")}`,
-                  borderRadius: 16, padding: "18px 24px",
-                  display: "flex", flexDirection: "column", alignItems: "center", gap: 12,
-                  zIndex: 30, minWidth: 200, textAlign: "center",
-                }}>
-                  <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, color: DS.ash, letterSpacing: 2 }}>WANTS TO PLAY</div>
-                  <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 20, color: DS.signal }}>
-                    {proposedGame.replace(/_/g, " ").toUpperCase()}
-                  </div>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <button
-                      onClick={() => {
-                        socket.emit("acceptGame", { roomId: matchInfo.roomId, game: proposedGame });
-                        setProposedGame(null);
-                      }}
-                      style={{ background: DS.signal, color: DS.void, border: "none", borderRadius: 14, padding: "9px 20px", fontFamily: "'JetBrains Mono', monospace", fontSize: 12, fontWeight: 700, cursor: "pointer" }}
-                    >
-                      ACCEPT
-                    </button>
-                    <button
-                      onClick={() => setProposedGame(null)}
-                      style={{ background: "transparent", color: DS.ash, border: `1px solid ${DS.rim}`, borderRadius: 14, padding: "9px 14px", fontSize: 12, cursor: "pointer" }}
-                    >
-                      Dismiss
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Opponent left overlay */}
-              {opponentLeft && (
-                <div style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: "50%", background: "rgba(0,0,0,0.8)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 14, zIndex: 20 }}>
-                  <div style={{ fontSize: 36 }}>👋</div>
-                  <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 20, color: DS.live }}>Stranger left</div>
-                  <button
-                    onClick={startSearch}
-                    style={{ background: DS.signal, color: DS.void, border: "none", borderRadius: 10, padding: "10px 24px", fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 14, cursor: "pointer" }}
-                  >
-                    Find another →
-                  </button>
-                </div>
-              )}
-            </div>
+          {/* ── SEARCHING + CONNECTED — one shared stage (see CallScreen.jsx) ── */}
+          {inCall && (matchPhase === "searching" || matchInfo) && (
+            <CallScreen
+              phase={matchPhase}
+              webrtc={webrtc}
+              opponent={matchInfo ? matchInfo.opponent : null}
+              liveCount={liveCount}
+              queueTime={queueTime}
+              opponentLeft={opponentLeft}
+              games={CALL_GAMES}
+              proposedGame={gameAccepted ? null : proposedGame}
+              onProposeGame={(id) => matchInfo && socket.emit("proposeGame", { roomId: matchInfo.roomId, game: id })}
+              onAcceptGame={() => {
+                if (!matchInfo || !proposedGame) return;
+                socket.emit("acceptGame", { roomId: matchInfo.roomId, game: proposedGame });
+                setProposedGame(null);
+              }}
+              onDismissGame={() => setProposedGame(null)}
+              onNext={() => {
+                if (matchInfo) socket.emit("match:leave", { roomId: matchInfo.roomId });
+                webrtc.closePeer();
+                startSearch(); // straight back into matchmaking
+              }}
+              onEnd={() => {
+                if (matchInfo) socket.emit("match:leave", { roomId: matchInfo.roomId });
+                webrtc.closePeer();
+                setMatchPhase("idle");
+                setMatchInfo(null);
+                setOpponentLeft(false);
+              }}
+              onCancel={cancelSearch}
+              onFindAnother={startSearch}
+            />
           )}
         </div>
       )}
