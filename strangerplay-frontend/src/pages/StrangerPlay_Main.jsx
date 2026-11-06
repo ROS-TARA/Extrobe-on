@@ -4,6 +4,7 @@ import { createPeer, parseIceServers, DEFAULT_ICE } from "../peer";
 import AppShell from "./AppShell";
 import Home from "./Home";
 import Profile from "./Profile";
+import Messages from "./Messages";
 import LoginSignup from "./LoginSignup";
 import Rewards from "./Rewards";
 import Settings from "./Settings";
@@ -953,21 +954,6 @@ const HOME_GAMES = [
   { emoji: "📖", title: "Finish My Story",desc: "One starts a story. The other ends it live.",            pts: 15, color: "#ff9f43" },
 ];
 
-/* "Coming soon" placeholder page (used for Messages — the server has no messaging yet). */
-function ComingSoon({ title, text, onHome }) {
-  return (
-    <div style={{ maxWidth: 560, margin: "6vh auto 0", textAlign: "center", padding: "40px 28px", border: `1px solid ${DS.rim}`, borderRadius: 24, background: DS.surface }}>
-      <div style={{ width: 64, height: 64, margin: "0 auto 20px", borderRadius: 18, display: "grid", placeItems: "center", background: `color-mix(in srgb, ${DS.signal} 14%, transparent)`, color: DS.signal }}>
-        <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-4.6A8 8 0 1 1 21 12z" /></svg>
-      </div>
-      <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, letterSpacing: 3, color: DS.signal, textTransform: "uppercase", marginBottom: 10 }}>coming soon</div>
-      <h2 style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 28, letterSpacing: -0.5, margin: "0 0 10px" }}>{title}</h2>
-      <p style={{ color: DS.ash, fontSize: 15, lineHeight: 1.6, margin: "0 0 24px" }}>{text}</p>
-      <button className="sp-btn-primary" style={{ padding: "12px 28px" }} onClick={onHome}>Back to home</button>
-    </div>
-  );
-}
-
 export default function StrangerPlay() {
   const [page, setPage] = useState("home");
 
@@ -1052,6 +1038,8 @@ export default function StrangerPlay() {
   // Latest page/phase for callbacks registered once (socket handlers would otherwise see stale values)
   const liveRef = useRef({ page: "home", matchPhase: "idle" });
   const [profileName, setProfileName] = useState(null);   // null = my own profile, else the player that was searched
+  const [unreadDm, setUnreadDm] = useState(0);              // unread messages (shown as a badge)
+  const [chatWith, setChatWith] = useState(null);             // open this chat as soon as the Messages page shows
   const [loginFrom, setLoginFrom] = useState("home");        // page to return to from the login screen (Back / after signing in)
   const [proposedGame, setProposedGame] = useState(null);  // game the other side proposed
   const [gameAccepted, setGameAccepted] = useState(false); // both accepted → open GameScreen
@@ -1160,6 +1148,19 @@ export default function StrangerPlay() {
       const shared = new URLSearchParams(window.location.search).get("u");
       if (shared && /^[A-Za-z0-9._]{1,30}$/.test(shared)) { setProfileName(shared.toLowerCase()); setPage("profile"); }
     } catch { /* ignore */ }
+  }, []);
+
+  // Unread messages: ask the server when I sign in, and count new ones live while I'm on another page.
+  useEffect(() => {
+    const t = localStorage.getItem("tz_token");
+    if (!user || !t) { setUnreadDm(0); return; }
+    fetch(`${import.meta.env.VITE_API_URL || "https://extrobe-on.onrender.com"}/api/messages/unread`, { headers: { Authorization: `Bearer ${t}` } })
+      .then((r) => (r.ok ? r.json() : null)).then((d) => { if (d && typeof d.count === "number") setUnreadDm(d.count); }).catch(() => {});
+  }, [user && user.username]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const onDm = (p) => { if (p && p.message && !p.message.fromMe && liveRef.current.page !== "messages") setUnreadDm((n) => n + 1); };
+    socket.on("dm:new", onDm);
+    return () => socket.off("dm:new", onDm);
   }, []);
 
   const webrtc = useWebRTC();
@@ -1271,6 +1272,7 @@ export default function StrangerPlay() {
         onBuyCoins={buyCoins}
         theme={theme}
         onToggleTheme={toggleTheme}
+        badges={{ messages: unreadDm }}
         bare={bareFrame}
       >
       {page === "home" && (
@@ -1778,12 +1780,23 @@ export default function StrangerPlay() {
           onLogin={goLogin}
           onLogout={handleLogout}
           onSettings={() => goTo("settings")}
+          onMessage={(u) => { setChatWith(u); goTo("messages"); }}
         />
       )}
 
       {page === "rewards"  && <Rewards  onNavigate={goTo} user={user} points={points} />}
       {page === "settings" && <Settings onNavigate={navTo} user={user} token={localStorage.getItem("tz_token")} onLogout={handleLogout} onUserUpdate={handleUserUpdate} theme={theme} onToggleTheme={toggleTheme} />}
-      {page === "messages" && <ComingSoon title="Messages are on the way" text="Soon you will be able to keep chatting with people you met on a call, even after it ends." onHome={() => goTo("home")} />}
+      {page === "messages" && (
+        <Messages
+          me={user}
+          token={localStorage.getItem("tz_token")}
+          openWith={chatWith}
+          onOpenHandled={() => setChatWith(null)}
+          onUnread={setUnreadDm}
+          onLogin={goLogin}
+          onViewProfile={(u) => { setProfileName(u); goTo("profile"); }}
+        />
+      )}
 
       {/* GameScreen — only renders on real match */}
       {page === "gamescreen" && matchPhase === "connected" && matchInfo ? (

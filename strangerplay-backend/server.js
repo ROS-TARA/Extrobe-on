@@ -123,6 +123,7 @@ const UserSchema = new mongoose.Schema({
   theme:       { type: String, default: "ocean" }, // card colour
   tags:        { type: [String], default: [] },    // "vibe" tags, max 5
   favGame:     { type: String, default: "" },
+  blocked:     [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],   // people I blocked (they can't message me, I can't message them)
   rank:        { type: String, default: "Bronze I" },
   globalRank:  { type: Number, default: 9999 },
   // forgot-password: we store a HASH of the token, never the raw token.
@@ -142,8 +143,38 @@ const MatchSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now },
 });
 
-const User  = mongoose.model("User",  UserSchema);
-const Match = mongoose.model("Match", MatchSchema);
+/* ── Messaging ── */
+const ObjId = mongoose.Schema.Types.ObjectId;
+const ConversationSchema = new mongoose.Schema({
+  key:      { type: String, unique: true },                // "<smallerId>:<largerId>" — one conversation per pair
+  members:  [{ type: ObjId, ref: "User" }],                // exactly two
+  lastText: { type: String, default: "" },
+  lastFrom: { type: ObjId },
+  lastAt:   { type: Date, default: Date.now, index: true },
+  unread:   { type: Object, default: {} },                 // { "<userId>": unreadCount }
+}, { minimize: false });
+const DirectMessageSchema = new mongoose.Schema({
+  conv:      { type: ObjId, index: true },
+  from:      { type: ObjId },
+  text:      { type: String },
+  createdAt: { type: Date, default: Date.now },
+});
+DirectMessageSchema.index({ conv: 1, createdAt: -1 });
+const MetSchema = new mongoose.Schema({                    // "these two have been matched on a call"
+  key:     { type: String, unique: true },
+  members: [{ type: ObjId, ref: "User" }],
+  lastAt:  { type: Date, default: Date.now },
+});
+const ReportSchema = new mongoose.Schema({
+  by: { type: ObjId }, who: { type: ObjId }, reason: String, details: String, createdAt: { type: Date, default: Date.now },
+});
+
+const User         = mongoose.model("User",          UserSchema);
+const Match        = mongoose.model("Match",         MatchSchema);
+const Conversation = mongoose.model("Conversation",  ConversationSchema);
+const DirectMessage= mongoose.model("DirectMessage", DirectMessageSchema);
+const Met          = mongoose.model("Met",           MetSchema);
+const Report       = mongoose.model("Report",        ReportSchema);
 
 /* ─────────────────────────────────────────────
    HELPERS
@@ -679,6 +710,184 @@ app.get("/api/user/:username/avatar", async (req, res) => {
 });
 
 /* ─────────────────────────────────────────────
+   MESSAGING — private 1-to-1 text messages
+
+   Who may message whom:
+     DM_POLICY=met      (default) people who have met on a call, or already have a conversation
+     DM_POLICY=anyone   any signed-in player (set this env var on Render to open it up)
+   Always: no messaging yourself, nobody who blocked you, nobody you blocked.
+   Text only, max 1000 characters, 15 messages per 30 seconds.
+───────────────────────────────────────────── */
+const DM_POLICY  = String(process.env.DM_POLICY || "met").toLowerCase() === "anyone" ? "anyone" : "met";
+const DM_MAX_LEN = 1000;
+const dmRate = new Map();                                   // userId -> recent send times
+const pairKey = (a, b) => [String(a), String(b)].sort().join(":");
+const sameId  = (a, b) => String(a) === String(b);
+function dmRateOk(userId) {
+  const now = Date.now(), arr = (dmRate.get(userId) || []).filter((t) => now - t < 30000);
+  if (arr.length >= 15) { dmRate.set(userId, arr); return false; }
+  arr.push(now); dmRate.set(userId, arr); return true;
+}
+const peerCard = (u) => ({ username: u.username, name: u.name, flag: u.flag, avatar: avatarUrl(u) });
+const PEER_FIELDS = "name username flag avatarV";
+
+// Can `me` message `peer`?  → { ok } or { ok:false, reason }
+async function dmCheck(me, peer) {
+  if (sameId(me._id, peer._id)) return { ok: false, reason: "self" };
+  if ((me.blocked || []).some((id) => sameId(id, peer._id))) return { ok: false, reason: "blocked_by_me" };
+  if ((peer.blocked || []).some((id) => sameId(id, me._id))) return { ok: false, reason: "unavailable" };   // don't reveal who blocked whom
+  if (DM_POLICY === "anyone") return { ok: true };
+  const key = pairKey(me._id, peer._id);
+  if (await Conversation.findOne({ key }).select("_id").lean()) return { ok: true };
+  if (await Met.findOne({ key }).select("_id").lean()) return { ok: true };
+  return { ok: false, reason: "not_met" };
+}
+async function dmContext(req, res) {            // loads me + the other player, or answers with an error
+  const me = await User.findById(req.userId).select(PEER_FIELDS + " blocked");
+  const peer = await User.findOne({ username: String(req.params.username).toLowerCase() }).select(PEER_FIELDS + " blocked");
+  if (!me) { res.status(401).json({ error: "please sign in again" }); return null; }
+  if (!peer) { res.status(404).json({ error: "player not found" }); return null; }
+  return { me, peer };
+}
+const dmOut = (m, myId) => ({ _id: String(m._id), fromMe: sameId(m.from, myId), text: m.text, createdAt: m.createdAt });
+async function unreadTotal(userId) {
+  const convs = await Conversation.find({ members: userId }).select("unread").lean();
+  return convs.reduce((n, c) => n + ((c.unread && c.unread[String(userId)]) || 0), 0);
+}
+
+// GET /api/messages/conversations — my inbox
+app.get("/api/messages/conversations", auth, async (req, res) => {
+  try {
+    const me = String(req.userId);
+    const convs = await Conversation.find({ members: me }).sort({ lastAt: -1 }).limit(60).lean();
+    const otherIds = convs.map((c) => (c.members || []).map(String).find((id) => id !== me)).filter(Boolean);
+    const users = await User.find({ _id: { $in: otherIds } }).select(PEER_FIELDS).lean();
+    const byId = new Map(users.map((u) => [String(u._id), u]));
+    const out = [];
+    for (const c of convs) {
+      const u = byId.get((c.members || []).map(String).find((id) => id !== me));
+      if (!u) continue;
+      out.push({ with: peerCard(u), lastText: c.lastText || "", lastFromMe: sameId(c.lastFrom, me), lastAt: c.lastAt, unread: (c.unread && c.unread[me]) || 0 });
+    }
+    res.set("Cache-Control", "no-store");
+    res.json({ conversations: out, unread: out.reduce((n, c) => n + c.unread, 0), policy: DM_POLICY });
+  } catch (e) { console.error("inbox error:", e.message); res.status(500).json({ error: "server error" }); }
+});
+
+// GET /api/messages/unread — just the number (for the badge)
+app.get("/api/messages/unread", auth, async (req, res) => {
+  try { res.set("Cache-Control", "no-store"); res.json({ count: await unreadTotal(req.userId) }); }
+  catch { res.status(500).json({ error: "server error" }); }
+});
+
+// GET /api/messages/met — people I have met on a call (for "start a chat")
+app.get("/api/messages/met", auth, async (req, res) => {
+  try {
+    const me = String(req.userId);
+    const [mine, rows] = await Promise.all([User.findById(me).select("blocked").lean(), Met.find({ members: me }).sort({ lastAt: -1 }).limit(40).lean()]);
+    const ids = rows.map((r) => (r.members || []).map(String).find((id) => id !== me)).filter(Boolean);
+    const users = await User.find({ _id: { $in: ids } }).select(PEER_FIELDS + " blocked").lean();
+    const byId = new Map(users.map((u) => [String(u._id), u]));
+    const blocked = (mine && mine.blocked || []).map(String);
+    const out = [];
+    for (const r of rows) {
+      const id = (r.members || []).map(String).find((x) => x !== me), u = byId.get(id);
+      if (!u || blocked.includes(id) || (u.blocked || []).some((b) => sameId(b, me))) continue;
+      out.push({ ...peerCard(u), lastAt: r.lastAt });
+    }
+    res.set("Cache-Control", "no-store");
+    res.json({ people: out });
+  } catch (e) { console.error("met error:", e.message); res.status(500).json({ error: "server error" }); }
+});
+
+// GET /api/messages/with/:username[?before=ISO] — one conversation (newest 30; opening it marks it read)
+app.get("/api/messages/with/:username", auth, async (req, res) => {
+  try {
+    const ctx = await dmContext(req, res); if (!ctx) return;
+    const { me, peer } = ctx, myId = String(me._id), key = pairKey(me._id, peer._id);
+    const chk = await dmCheck(me, peer);
+    const conv = await Conversation.findOne({ key }).lean();
+    let messages = [], hasMore = false;
+    if (conv) {
+      const before = req.query.before ? new Date(String(req.query.before)) : null;
+      const filter = { conv: conv._id };
+      if (before && !isNaN(before)) filter.createdAt = { $lt: before };
+      const rows = await DirectMessage.find(filter).sort({ createdAt: -1 }).limit(31).lean();
+      hasMore = rows.length > 30;
+      messages = rows.slice(0, 30).reverse().map((m) => dmOut(m, myId));
+      if (!before) await Conversation.updateOne({ _id: conv._id }, { $set: { ["unread." + myId]: 0 } });
+    }
+    res.set("Cache-Control", "no-store");
+    res.json({ peer: peerCard(peer), canMessage: chk.ok, reason: chk.ok ? null : chk.reason, blockedByMe: chk.reason === "blocked_by_me", messages, hasMore, policy: DM_POLICY });
+  } catch (e) { console.error("thread error:", e.message); res.status(500).json({ error: "server error" }); }
+});
+
+// POST /api/messages/with/:username  { text }
+app.post("/api/messages/with/:username", auth, async (req, res) => {
+  try {
+    const raw = req.body && req.body.text;
+    if (typeof raw !== "string") return res.status(400).json({ error: "write a message first" });
+    const text = raw.replace(/\r\n?/g, "\n").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "").replace(/\n{3,}/g, "\n\n").trim();
+    if (!text) return res.status(400).json({ error: "write a message first" });
+    if (text.length > DM_MAX_LEN) return res.status(400).json({ error: `messages can be up to ${DM_MAX_LEN} characters` });
+    const ctx = await dmContext(req, res); if (!ctx) return;
+    const { me, peer } = ctx, myId = String(me._id), peerId = String(peer._id);
+    const chk = await dmCheck(me, peer);
+    if (!chk.ok) return res.status(403).json({ error: chk.reason === "not_met" ? "You can message people after you've met on a call." : chk.reason === "blocked_by_me" ? "You blocked this player." : "You can't message this player.", reason: chk.reason });
+    if (!dmRateOk(myId)) return res.status(429).json({ error: "You're sending messages too fast. Wait a few seconds." });
+
+    const key = pairKey(myId, peerId);
+    let conv = await Conversation.findOne({ key });
+    if (!conv) { try { conv = await Conversation.create({ key, members: [myId, peerId] }); } catch { conv = await Conversation.findOne({ key }); } }
+    const msg = await DirectMessage.create({ conv: conv._id, from: myId, text });
+    await Conversation.updateOne({ _id: conv._id }, { $set: { lastText: text.slice(0, 120), lastFrom: myId, lastAt: msg.createdAt }, $inc: { ["unread." + peerId]: 1 } });
+
+    // live delivery: to the other player's devices, and to my other devices
+    io.to("user:" + peerId).emit("dm:new", { with: me.username, peer: peerCard(me), message: dmOut(msg, peerId) });
+    io.to("user:" + myId).emit("dm:new", { with: peer.username, peer: peerCard(peer), message: dmOut(msg, myId) });
+    res.status(201).json({ message: dmOut(msg, myId) });
+  } catch (e) { console.error("send error:", e.message); res.status(500).json({ error: "server error" }); }
+});
+
+// POST /api/messages/with/:username/read
+app.post("/api/messages/with/:username/read", auth, async (req, res) => {
+  try {
+    const ctx = await dmContext(req, res); if (!ctx) return;
+    const { me, peer } = ctx;
+    await Conversation.updateOne({ key: pairKey(me._id, peer._id) }, { $set: { ["unread." + String(me._id)]: 0 } });
+    res.json({ count: await unreadTotal(me._id) });
+  } catch { res.status(500).json({ error: "server error" }); }
+});
+
+// POST / DELETE /api/user/:username/block
+for (const method of ["post", "delete"]) {
+  app[method]("/api/user/:username/block", auth, async (req, res) => {
+    try {
+      const ctx = await dmContext(req, res); if (!ctx) return;
+      if (sameId(ctx.me._id, ctx.peer._id)) return res.status(400).json({ error: "you can't block yourself" });
+      await User.updateOne({ _id: ctx.me._id }, method === "post" ? { $addToSet: { blocked: ctx.peer._id } } : { $pull: { blocked: ctx.peer._id } });
+      res.json({ blocked: method === "post" });
+    } catch { res.status(500).json({ error: "server error" }); }
+  });
+}
+
+// POST /api/report  { username, reason, details }
+const REPORT_REASONS = ["spam", "harassment", "inappropriate", "underage", "other"];
+app.post("/api/report", auth, async (req, res) => {
+  try {
+    const { username, reason, details } = req.body || {};
+    if (!REPORT_REASONS.includes(reason)) return res.status(400).json({ error: "choose a reason" });
+    const who = await User.findOne({ username: String(username || "").toLowerCase() }).select("_id");
+    if (!who) return res.status(404).json({ error: "player not found" });
+    if (sameId(who._id, req.userId)) return res.status(400).json({ error: "you can't report yourself" });
+    const text = typeof details === "string" ? details.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 300) : "";
+    await Report.create({ by: req.userId, who: who._id, reason, details: text });
+    console.log(`🚩 report | reason=${reason} | about=${String(username).toLowerCase()} | by=${req.userId}`);
+    res.status(201).json({ ok: true });
+  } catch (e) { console.error("report error:", e.message); res.status(500).json({ error: "server error" }); }
+});
+
+/* ─────────────────────────────────────────────
    REST — LEADERBOARD
 ───────────────────────────────────────────── */
 /* ─────────────────────────────────────────────
@@ -842,6 +1051,7 @@ io.use(async (socket, next) => {
 
 io.on("connection", (socket) => {
   console.log("🔌 connected:", socket.id, socket.userId ? "(authenticated)" : "(guest)");
+  if (socket.userId)         socket.join("user:" + socket.userId);    // live messages are delivered to this room
   if (socket.userId)         socket.emit("auth:ok", socket.authUser);
   else if (socket.authError) socket.emit("auth:error", socket.authError);
   broadcastOnlineCount();
@@ -978,6 +1188,15 @@ io.on("connection", (socket) => {
         gameMode,
         entryFee,
       });
+
+      // Remember that these two have met, so they can message each other afterwards.
+      if (socket.userId && p2.userId) {
+        Met.updateOne(
+          { key: pairKey(socket.userId, p2.userId) },
+          { $set: { members: [socket.userId, p2.userId], lastAt: new Date() } },
+          { upsert: true }
+        ).catch((e) => console.error("met record failed:", e.message));
+      }
 
       console.log(`🎮 matched: ${socket.id} ↔ ${p2.socketId} | room: ${roomId} | game: ${gameMode}`);
     }

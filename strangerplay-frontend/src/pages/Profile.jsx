@@ -21,6 +21,7 @@
     onLogin       fn        guests are sent to sign in
     onLogout      fn?       shows a Log out button on your own card
     onSettings    fn?       shows a Settings button on your own card
+    onMessage     fn(username)?  "Message" button on other players' cards
 */
 import { useEffect, useRef, useState } from "react";
 
@@ -147,7 +148,7 @@ const Ic = ({ children, size = 18 }) => (
 );
 
 /* ═══════════════════════════════ page ═══════════════════════════════ */
-export default function Profile({ username, me, token, games = [], onUserUpdate, onPlay, onLogin, onLogout, onSettings }) {
+export default function Profile({ username, me, token, games = [], onUserUpdate, onPlay, onLogin, onLogout, onSettings, onMessage }) {
   const isMe = !!(me && username && me.username === String(username).toLowerCase());
   const [other, setOther] = useState(null);
   const [status, setStatus] = useState(isMe ? "ok" : "loading");
@@ -223,7 +224,8 @@ export default function Profile({ username, me, token, games = [], onUserUpdate,
             </>
           ) : (
             <>
-              <button className="tpf-btn tpf-white" onClick={me ? onPlay : onLogin}>{me ? "Find a stranger" : "Sign in to play"}</button>
+              {me && onMessage && <button className="tpf-btn tpf-white" onClick={() => onMessage(p.username)}><Ic><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-4.6A8 8 0 1 1 21 12z" /></Ic>Message</button>}
+              <button className={`tpf-btn ${me && onMessage ? "tpf-glass" : "tpf-white"}`} onClick={me ? onPlay : onLogin}>{me ? "Find a stranger" : "Sign in to play"}</button>
               <button className="tpf-btn tpf-glass" onClick={share}>Share</button>
             </>
           )}

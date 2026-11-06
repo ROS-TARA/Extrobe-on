@@ -15,6 +15,7 @@
     onBuyCoins      fn()?         opens the coin purchase flow
     theme           "dark" | "light"
     onToggleTheme   fn()
+    badges          { messages: n }?   unread counts shown on the nav items
     bare            boolean?      true = hide the frame (live call, game, login)
 
   Same features on every screen size:
@@ -52,7 +53,7 @@ const NAV = [
   { key: "home", label: "Home", Icon: HomeI, tab: true },
   { key: "match", label: "Random match", Icon: VideoI, tab: true },
   { key: "live", label: "Live", Icon: LiveI, tab: true },
-  { key: "messages", label: "Messages", Icon: ChatI, tab: true },
+  { key: "messages", label: "Messages", Icon: ChatI, tab: true, auth: true },
   { key: "rewards", label: "Rewards", Icon: StarI },
   { key: "ranking", label: "Ranking", Icon: TrophyI },
   { key: "profile", label: "Profile", Icon: UserI, tab: true, auth: true },
@@ -79,7 +80,7 @@ function Avatar({ user, size = 34 }) {
 
 export default function AppShell({
   user, page, onNavigate, onSearch, onLogin, onLogout, online, points,
-  onBuyCoins, theme, onToggleTheme, bare, children,
+  onBuyCoins, theme, onToggleTheme, badges, bare, children,
 }) {
   const [menu, setMenu] = useState(false);
   const [more, setMore] = useState(false);
@@ -124,6 +125,7 @@ export default function AppShell({
   const moreItems = NAV.filter((n) => !n.tab);
   const shownPoints = typeof points === "number" ? points : (user && user.points) || 0;
   const coins = user && user.coins != null ? user.coins : 0;
+  const badge = (key) => (badges && badges[key] > 0 ? (badges[key] > 9 ? "9+" : String(badges[key])) : "");
 
   return (
     <div className="tzs">
@@ -135,7 +137,7 @@ export default function AppShell({
           {NAV.map((n) => (
             <button key={n.key} className={`tzs-item ${page === n.key ? "on" : ""}`} onClick={() => go(n)} aria-current={page === n.key ? "page" : undefined}>
               <n.Icon /><span>{n.label}</span>
-              {n.key === "messages" && <em className="tzs-soon">Soon</em>}
+              {badge(n.key) && <em className="tzs-count" aria-label={`${badge(n.key)} unread`}>{badge(n.key)}</em>}
             </button>
           ))}
         </nav>
@@ -195,7 +197,7 @@ export default function AppShell({
       <nav className="tzs-tabs" aria-label="Main">
         {tabs.map((n) => (
           <button key={n.key} className={page === n.key ? "on" : ""} onClick={() => go(n)} aria-label={n.label} title={n.label} aria-current={page === n.key ? "page" : undefined}>
-            {n.key === "profile" && user ? <Avatar user={user} size={28} /> : <n.Icon />}
+            {n.key === "profile" && user ? <Avatar user={user} size={28} /> : <span className="tzs-bwrap"><n.Icon />{badge(n.key) && <i className="tzs-badge" aria-label={`${badge(n.key)} unread`}>{badge(n.key)}</i>}</span>}
           </button>
         ))}
       </nav>
@@ -222,7 +224,7 @@ export default function AppShell({
               {moreItems.map((n) => (
                 <button key={n.key} className={page === n.key ? "on" : ""} onClick={() => go(n)}>
                   <n.Icon /><span>{n.label}</span>
-                  {n.key === "messages" && <em className="tzs-soon">Soon</em>}
+                  {badge(n.key) && <em className="tzs-count" aria-label={`${badge(n.key)} unread`}>{badge(n.key)}</em>}
                 </button>
               ))}
               {user && (
@@ -260,6 +262,9 @@ const CSS = `
 .tzs-item{position:relative;display:flex;align-items:center;gap:14px;width:100%;padding:12px 14px;border:0;border-radius:12px;background:none;color:var(--sp-ash);font-size:15px;font-weight:500;text-align:left;cursor:pointer;transition:background .15s,color .15s}
 .tzs-item:hover{background:var(--sp-surface2);color:var(--sp-plat)}
 .tzs-item.on{color:var(--sp-signal);font-weight:600;background:color-mix(in srgb,var(--sp-signal) 12%,transparent)}
+.tzs-count{margin-left:auto;min-width:22px;padding:2px 7px;border-radius:999px;background:var(--sp-live);color:#fff;font-size:11px;font-weight:700;font-style:normal;text-align:center}
+.tzs-bwrap{position:relative;display:grid;place-items:center}
+.tzs-badge{position:absolute;top:-7px;right:-11px;display:grid;place-items:center;min-width:19px;height:19px;padding:0 5px;border:2px solid var(--sp-surface);border-radius:10px;background:var(--sp-live);color:#fff;font-size:11px;font-weight:700;font-style:normal}
 .tzs-soon{margin-left:auto;padding:2px 8px;border-radius:999px;background:var(--sp-surface2);color:var(--sp-ash);font-size:10px;font-style:normal;font-weight:600;letter-spacing:.4px;text-transform:uppercase}
 .tzs-item.on .tzs-soon{background:color-mix(in srgb,var(--sp-signal) 18%,transparent);color:var(--sp-signal)}
 .tzs-meet{display:flex;align-items:center;gap:12px;margin-top:auto;padding:14px;border:1px solid var(--sp-rim);border-radius:14px;background:var(--sp-surface2);font-size:13px;line-height:1.35;color:var(--sp-ash)}
