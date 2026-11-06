@@ -5,7 +5,8 @@
     ┌──────────── stage ────────────┐   phone (portrait):   stranger on top, you below
     │  stranger tile │  you tile    │   desktop (landscape): stranger left, you right
     └───────────────────────────────┘   Each tile is exactly half of the stage.
-    [ mic ] [ cam ] [ Games ] [ NEXT ] [ end ]   <- control bar (its own row, never over the video)
+    [ mic ] [ cam ] [ Games ] [ NEXT ]   <- control bar (its own row, never over the video)
+    End call / Cancel search = the round X in the stranger's tile corner.
 
   GAME SLOTS (all optional, all empty today — nothing is drawn until you pass something in):
     arena        covers the WHOLE stage (both tiles). Put a game canvas / component here.
@@ -38,6 +39,16 @@ const P = {
   wave: <><path d="M7 11V6a1.5 1.5 0 0 1 3 0v4M10 10V4.5a1.5 1.5 0 0 1 3 0V10M13 10V5.5a1.5 1.5 0 0 1 3 0V12M16 9a1.5 1.5 0 0 1 3 0v4a7 7 0 0 1-7 7h-1a6 6 0 0 1-5-3l-2-3.5a1.4 1.4 0 0 1 2.4-1.4L7 14" /></>,
 };
 
+function GameLogo({ kind }) {
+  const z = { width: 30, height: 30, viewBox: "0 0 24 24", fill: "#fff", "aria-hidden": true };
+  if (kind === "echo") {
+    // sound bars
+    return (<svg {...z}><rect x="3" y="10" width="3" height="6" rx="1.5" /><rect x="8" y="6" width="3" height="14" rx="1.5" /><rect x="13" y="3" width="3" height="19" rx="1.5" /><rect x="18" y="8" width="3" height="9" rx="1.5" /></svg>);
+  }
+  // floppy board: two gates and the board between them
+  return (<svg {...z}><rect x="2.5" y="1.5" width="5" height="8" rx="1.6" opacity=".92" /><rect x="2.5" y="15.5" width="5" height="7" rx="1.6" opacity=".92" /><circle cx="15.5" cy="12" r="5.5" /><circle cx="17.2" cy="10.6" r="1.2" fill="rgba(0,0,0,.55)" /></svg>);
+}
+
 const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 
 export default function CallScreen({
@@ -47,7 +58,7 @@ export default function CallScreen({
   liveCount = 0,
   queueTime = 0,
   opponentLeft = false,
-  games = [],           // [{ id, emoji, label }]
+  games = [],           // [{ id, label, sub, icon: "floppy"|"echo", c1, c2, soon? }]  soon = shown but not playable yet
   proposedGame = null,  // game id the other person proposed
   onProposeGame, onAcceptGame, onDismissGame,
   onNext, onEnd, onCancel, onFindAnother,
@@ -122,6 +133,10 @@ export default function CallScreen({
             </div>
           )}
 
+          <button className="tzc-x" onClick={searching ? onCancel : onEnd} aria-label={searching ? "Cancel search" : "End call"}>
+            <Ic size={18}>{P.end}</Ic>
+          </button>
+
           {theirOverlay && <div className="tzc-slot">{theirOverlay}</div>}
         </div>
 
@@ -169,40 +184,45 @@ export default function CallScreen({
           </div>
         )}
 
-        {/* games tray */}
-        {!searching && tray && games.length > 0 && (
-          <div className="tzc-tray" role="menu" aria-label="Pick a game">
-            {games.map((g) => (
-              <button key={g.id} role="menuitem" onClick={() => { setTray(false); onProposeGame && onProposeGame(g.id); }}>
-                <span>{g.emoji}</span>{g.label}
-              </button>
-            ))}
-          </div>
+        {/* games sheet */}
+        {tray && (
+          <>
+            <div className="tzc-scrim" onClick={() => setTray(false)} />
+            <div className="tzc-tray" role="dialog" aria-label="Games">
+              <div className="tzc-tray-h">
+                <div><b>Games</b><small>{searching ? "You pick one together once you are connected." : "Pick one to play together."}</small></div>
+                <button className="tzc-tray-x" onClick={() => setTray(false)} aria-label="Close games"><Ic size={18}>{P.end}</Ic></button>
+              </div>
+              <div className="tzc-games">
+                {games.map((g) => (
+                  <button key={g.id} className="tzc-game" disabled={!!g.soon || searching}
+                    onClick={() => { setTray(false); onProposeGame && onProposeGame(g.id); }}>
+                    <span className="tzc-logo" style={{ background: `linear-gradient(135deg,${g.c1},${g.c2})` }}><GameLogo kind={g.icon} /></span>
+                    <b>{g.label}</b>
+                    <small>{g.sub}</small>
+                    {g.soon && <em>Coming soon</em>}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </>
         )}
       </div>
 
       {/* ───────── control bar ───────── */}
       <div className="tzc-bar">
-        <button className={`tzc-round ${w.muted ? "off" : ""}`} onClick={w.toggleMute} aria-label={w.muted ? "Unmute microphone" : "Mute microphone"} aria-pressed={!!w.muted}>
-          <Ic>{w.muted ? P.micOff : P.mic}</Ic>
-        </button>
-        <button className={`tzc-round ${w.camOff ? "off" : ""}`} onClick={w.toggleCam} aria-label={w.camOff ? "Turn camera on" : "Turn camera off"} aria-pressed={!!w.camOff}>
-          <Ic>{w.camOff ? P.camOff : P.cam}</Ic>
-        </button>
-
-        {searching ? (
-          <button className="tzc-pill tzc-cancel" onClick={onCancel}>Cancel</button>
-        ) : (
-          <>
-            {games.length > 0 && (
-              <button className={`tzc-round ${tray ? "on" : ""}`} onClick={() => setTray((t) => !t)} aria-label="Games" aria-expanded={tray}>
-                <Ic>{P.games}</Ic>
-              </button>
-            )}
-            <button className="tzc-next" onClick={onNext}>Next<Ic size={20}>{P.next}</Ic></button>
-            <button className="tzc-round tzc-end" onClick={onEnd} aria-label="End call"><Ic>{P.end}</Ic></button>
-          </>
-        )}
+        <div className="tzc-bar-in">
+          <button className={`tzc-round ${w.muted ? "off" : ""}`} onClick={w.toggleMute} aria-label={w.muted ? "Unmute microphone" : "Mute microphone"} aria-pressed={!!w.muted}>
+            <Ic>{w.muted ? P.micOff : P.mic}</Ic>
+          </button>
+          <button className={`tzc-round ${w.camOff ? "off" : ""}`} onClick={w.toggleCam} aria-label={w.camOff ? "Turn camera on" : "Turn camera off"} aria-pressed={!!w.camOff}>
+            <Ic>{w.camOff ? P.camOff : P.cam}</Ic>
+          </button>
+          <button className={`tzc-gbtn ${tray ? "on" : ""}`} onClick={() => setTray((t) => !t)} aria-expanded={tray}>
+            <Ic size={20}>{P.games}</Ic>Games
+          </button>
+          <button className="tzc-next" onClick={onNext}>Next<Ic size={20}>{P.next}</Ic></button>
+        </div>
       </div>
     </div>
   );
@@ -264,31 +284,51 @@ const CSS = `
 .tzc-result-card.win{border-color:var(--sp-ice)}.tzc-result-card.win b{color:var(--sp-ice)}
 .tzc-result-card.lose{border-color:var(--sp-live)}.tzc-result-card.lose b{color:var(--sp-live)}
 
-/* game invitation + tray */
-.tzc-propose{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:14;display:flex;flex-direction:column;align-items:center;gap:10px;min-width:230px;padding:20px 24px;border-radius:20px;background:var(--sp-surface);border:1px solid var(--sp-rim);box-shadow:0 18px 50px rgba(0,0,0,.45);text-align:center}
+/* game invitation */
+.tzc-propose{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:16;display:flex;flex-direction:column;align-items:center;gap:10px;min-width:230px;padding:20px 24px;border-radius:20px;background:var(--sp-surface);border:1px solid var(--sp-rim);box-shadow:0 18px 50px rgba(0,0,0,.45);text-align:center}
 .tzc-propose small{color:var(--sp-ash);font-size:13px}
 .tzc-propose b{font-size:21px;font-weight:700;text-transform:capitalize}
 .tzc-propose div{display:flex;gap:8px}
-.tzc-tray{position:absolute;left:12px;right:12px;bottom:10px;z-index:14;display:flex;gap:8px;overflow-x:auto;padding:10px;border-radius:18px;background:color-mix(in srgb,var(--sp-surface) 94%,transparent);backdrop-filter:blur(12px);border:1px solid var(--sp-rim);scrollbar-width:none}
-.tzc-tray::-webkit-scrollbar{display:none}
-.tzc-tray button{flex:none;display:flex;align-items:center;gap:7px;padding:9px 14px;border:1px solid var(--sp-rim);border-radius:999px;background:var(--sp-surface2);color:var(--sp-plat);font-size:13px;font-weight:600;white-space:nowrap}
-.tzc-tray button:hover{border-color:var(--sp-signal);color:var(--sp-signal)}
 
-/* control bar */
-.tzc-bar{flex:none;display:flex;align-items:center;justify-content:center;gap:12px;padding:10px 12px calc(12px + env(safe-area-inset-bottom,0px))}
+/* games sheet */
+.tzc-scrim{position:absolute;inset:0;z-index:13}
+.tzc-tray{position:absolute;left:10px;right:10px;bottom:6px;z-index:14;max-width:640px;margin:0 auto;padding:14px 14px 16px;border-radius:24px;background:color-mix(in srgb,var(--sp-surface) 96%,transparent);backdrop-filter:blur(16px);border:1px solid var(--sp-rim);box-shadow:0 -10px 40px rgba(0,0,0,.35)}
+.tzc-tray-h{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:12px}
+.tzc-tray-h b{display:block;font-size:17px;font-weight:700}
+.tzc-tray-h small{display:block;margin-top:2px;color:var(--sp-ash);font-size:13px;line-height:1.4}
+.tzc-tray-x{display:grid;place-items:center;flex:none;width:34px;height:34px;border:0;border-radius:50%;background:var(--sp-surface2);color:var(--sp-ash)}
+.tzc-tray-x:hover{background:var(--sp-rim)}
+.tzc-games{display:flex;gap:12px;overflow-x:auto;padding:2px 2px 4px;scroll-snap-type:x proximity;scrollbar-width:none}
+.tzc-games::-webkit-scrollbar{display:none}
+.tzc-game{position:relative;flex:none;width:156px;display:flex;flex-direction:column;align-items:flex-start;gap:3px;padding:14px;border:1px solid var(--sp-rim);border-radius:18px;background:var(--sp-surface2);color:var(--sp-plat);text-align:left;scroll-snap-align:start;transition:border-color .15s,transform .15s}
+.tzc-game:not(:disabled):hover{border-color:var(--sp-signal)}
+.tzc-game:disabled{cursor:default}
+.tzc-logo{display:grid;place-items:center;width:56px;height:56px;margin-bottom:8px;border-radius:16px;box-shadow:0 8px 18px rgba(0,0,0,.28),inset 0 1px 0 rgba(255,255,255,.28)}
+.tzc-game b{font-size:15px;font-weight:700}
+.tzc-game small{color:var(--sp-ash);font-size:12px;line-height:1.35}
+.tzc-game em{margin-top:8px;padding:3px 9px;border-radius:999px;background:color-mix(in srgb,var(--sp-gold) 20%,transparent);color:var(--sp-gold);font-size:11px;font-style:normal;font-weight:700}
+
+/* end / cancel (round X in the stranger tile) */
+.tzc-x{position:absolute;top:10px;right:10px;z-index:6;display:grid;place-items:center;width:40px;height:40px;border:0;border-radius:50%;background:color-mix(in srgb,#000 55%,transparent);backdrop-filter:blur(10px);color:#fff;transition:background .15s}
+.tzc-x:hover{background:var(--sp-live)}
+
+/* control bar: mic + camera stay round, Games + Next share the rest of the width */
+.tzc-bar{flex:none;display:flex;justify-content:center;padding:10px 12px calc(12px + env(safe-area-inset-bottom,0px))}
+.tzc-bar-in{display:flex;align-items:center;gap:10px;width:100%;max-width:560px}
 .tzc-round{display:grid;place-items:center;flex:none;width:52px;height:52px;border-radius:50%;border:1px solid var(--sp-rim);background:var(--sp-surface);color:var(--sp-plat);transition:background .15s,border-color .15s}
 .tzc-round:hover{background:var(--sp-surface2)}
 .tzc-round.off{background:var(--sp-live);border-color:var(--sp-live);color:#fff}
-.tzc-round.on{background:var(--sp-signal);border-color:var(--sp-signal);color:#fff}
-.tzc-end{color:var(--sp-live);border-color:color-mix(in srgb,var(--sp-live) 45%,var(--sp-rim))}
-.tzc-end:hover{background:var(--sp-live);color:#fff;border-color:var(--sp-live)}
-.tzc-next{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:52px;padding:0 30px;border:0;border-radius:999px;background:var(--sp-signal);color:#fff;font-size:16px;font-weight:700;transition:background .15s}
-.tzc-next:hover{background:color-mix(in srgb,var(--sp-signal) 88%,#000)}
+.tzc-gbtn,.tzc-next{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-width:0;height:52px;padding:0 14px;border-radius:999px;font-size:15px;font-weight:700;white-space:nowrap}
+.tzc-gbtn{flex:1 1 0;border:1px solid var(--sp-rim);background:var(--sp-surface);color:var(--sp-plat);transition:background .15s,border-color .15s,color .15s}
+.tzc-gbtn:hover{background:var(--sp-surface2)}
+.tzc-gbtn.on{border-color:var(--sp-signal);color:var(--sp-signal);background:color-mix(in srgb,var(--sp-signal) 12%,var(--sp-surface))}
+.tzc-next{flex:1.25 1 0;border:0;color:#fff;background:linear-gradient(135deg,var(--sp-signal),color-mix(in srgb,var(--sp-signal) 70%,#000));box-shadow:0 8px 20px color-mix(in srgb,var(--sp-signal) 40%,transparent);transition:filter .15s,transform .1s}
+.tzc-next:hover{filter:brightness(1.08)}
+.tzc-next:active{transform:scale(.98)}
 .tzc-pill{display:inline-flex;align-items:center;justify-content:center;padding:10px 20px;border:1px solid var(--sp-rim);border-radius:999px;background:var(--sp-surface2);color:var(--sp-plat);font-size:14px;font-weight:600}
 .tzc-pill:hover{background:var(--sp-rim)}
 .tzc-pill.main{border-color:transparent;background:var(--sp-signal);color:#fff}
 .tzc-pill.main:hover{background:color-mix(in srgb,var(--sp-signal) 88%,#000)}
-.tzc-cancel{height:52px;padding:0 30px;font-size:16px}
 .tzc button:focus-visible{outline:2px solid var(--sp-signal);outline-offset:2px}
-@media (max-width:420px){.tzc-bar{gap:9px}.tzc-round{width:48px;height:48px}.tzc-next{height:48px;padding:0 22px}}
+@media (max-width:420px){.tzc-bar-in{gap:8px}.tzc-round{width:46px;height:46px}.tzc-gbtn,.tzc-next{height:46px;padding:0 10px;font-size:14px;gap:6px}}
 `;

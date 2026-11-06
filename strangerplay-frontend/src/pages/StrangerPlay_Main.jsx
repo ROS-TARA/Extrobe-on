@@ -955,14 +955,11 @@ const HOME_GAMES = [
   { emoji: "📖", title: "Finish My Story",desc: "One starts a story. The other ends it live.",            pts: 15, color: "#ff9f43" },
 ];
 
-// Games a player can propose during a call (same ids the server already understands).
+// Games shown in the call's Games menu. soon: true = visible but not playable yet.
+// When a game is built: set soon to false and make sure the server understands its id.
 const CALL_GAMES = [
-  { id: "dontlaugh",     emoji: "😐", label: "Don't Laugh" },
-  { id: "vibecheck",     emoji: "🎭", label: "Vibe Check"  },
-  { id: "mirrorme",      emoji: "🪞", label: "Mirror Me"   },
-  { id: "hottake",       emoji: "🌶️", label: "Hot Take"    },
-  { id: "echo",          emoji: "🔊", label: "Echo"        },
-  { id: "finishmystory", emoji: "📖", label: "Story"       },
+  { id: "floppy", label: "Floppy Board", sub: "Steer the board with your head", icon: "floppy", c1: "#1877f2", c2: "#0d55c7", soon: true },
+  { id: "echo",   label: "Echo",         sub: "Louder goes up, softer goes down", icon: "echo",   c1: "#7457ec", c2: "#4a35c4", soon: true },
 ];
 
 export default function StrangerPlay() {
@@ -1410,6 +1407,8 @@ export default function StrangerPlay() {
               }}
               onDismissGame={() => setProposedGame(null)}
               onNext={() => {
+                // Still searching: leave the queue and join again (fresh search). In a call: skip to the next person.
+                if (matchPhase === "searching") { cancelSearch(); startSearch(); return; }
                 if (matchInfo) socket.emit("match:leave", { roomId: matchInfo.roomId });
                 webrtc.closePeer();
                 startSearch(); // straight back into matchmaking
