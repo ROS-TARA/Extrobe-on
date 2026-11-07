@@ -1,684 +1,237 @@
-import { useState, useEffect, useRef } from "react";
-import { tint } from "./theme";
+/*
+  Rewards.jsx — your coins, the daily tasks, and the rank ladder.
 
-/* ─────────────────────────────────────────────
-   REWARDS PAGE
-   // what you get for not being bad at this
-   
-   TEACH: This page shows the 100-point reward system.
-   Key concepts used here:
-   - useState for tab/hover state
-   - Array.map() for rendering reward cards
-   - CSS animations via inline keyframe injection
-   - Conditional rendering with ternary operators
-   - Progress bar math: (points / threshold) * 100
-───────────────────────────────────────────── */
+  Everything here is real: coins and points come from your account, task progress comes from the
+  server (GET /api/rewards/daily) and a task is only paid when the server says so
+  (POST /api/rewards/daily/:id/claim). Nothing is faked on this screen.
 
-const css = `
-  @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=JetBrains+Mono:wght@400;500&family=Syne:wght@400;600;700;800&display=swap');
+  Props:
+    user          signed-in user (or null)
+    token         sign-in token
+    points        number?  live points
+    onUserUpdate  fn(user)  called after a collect so the app shows the new coin total
+    onBuyCoins    fn?       opens the buy-coins flow
+    onLogin       fn        guests
+    onNavigate    fn(key)   "match"
+*/
+import { useCallback, useEffect, useState } from "react";
 
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+const API = import.meta.env.VITE_API_URL || "https://extrobe-on.onrender.com";
 
-  body {
-    background: var(--sp-void);
-    color: var(--sp-plat);
-    font-family: 'Inter', sans-serif;
-    min-height: 100vh;
-    overflow-x: hidden;
-  }
+// Must match MIN_COINS_TO_PLAY in server.js
+const MIN_COINS_TO_PLAY = 5;
+const SIGNUP_COINS = 25;
+// Must match calculateRank() in server.js
+const RANKS = [["Bronze I", 0], ["Bronze II", 20], ["Bronze III", 50], ["Silver I", 100], ["Silver II", 500], ["Gold", 1000], ["Diamond", 5000]];
 
-  @keyframes shimmer {
-    to { background-position: -200% center; }
-  }
-  @keyframes fadeUp {
-    from { opacity: 0; transform: translateY(22px); }
-    to   { opacity: 1; transform: translateY(0); }
-  }
-  @keyframes orbFloat {
-    0%,100% { transform: translateY(0) scale(1); }
-    50%      { transform: translateY(-28px) scale(1.04); }
-  }
-  @keyframes glowPulse {
-    0%,100% { box-shadow: 0 0 20px rgba(0,245,160,0.25); }
-    50%      { box-shadow: 0 0 50px rgba(0,245,160,0.55); }
-  }
-  @keyframes lockPop {
-    0%   { transform: scale(0.6) rotate(-8deg); opacity: 0; }
-    70%  { transform: scale(1.1) rotate(2deg); }
-    100% { transform: scale(1) rotate(0deg); opacity: 1; }
-  }
-  @keyframes scanline {
-    0%   { top: -4px; }
-    100% { top: 100%; }
-  }
-  @keyframes barGrow {
-    from { width: 0; }
-  }
-  @keyframes tickerMove {
-    from { transform: translateX(0); }
-    to   { transform: translateX(-50%); }
-  }
-  @keyframes sparkle {
-    0%, 100% { opacity: 0; transform: scale(0); }
-    50%       { opacity: 1; transform: scale(1); }
-  }
-  @keyframes rewardReveal {
-    from { opacity: 0; transform: translateY(30px) scale(0.96); }
-    to   { opacity: 1; transform: translateY(0) scale(1); }
-  }
-  @keyframes goldShimmer {
-    0%   { background-position: -200% center; }
-    100% { background-position: 200% center; }
-  }
-  @keyframes borderGlow {
-    0%,100% { border-color: color-mix(in srgb, var(--sp-gold) 20%, transparent); }
-    50%      { border-color: color-mix(in srgb, var(--sp-gold) 60%, transparent); }
-  }
+async function api(path, { method = "GET", token } = {}) {
+  const r = await fetch(API + path, { method, headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || "Something went wrong. Try again.");
+  return data;
+}
 
-  .fade-up { animation: none; }
+const left = (ms) => {
+  const m = Math.max(0, Math.floor(ms / 60000));
+  const h = Math.floor(m / 60);
+  return h > 0 ? `${h}h ${m % 60}m` : `${Math.max(1, m)}m`;
+};
 
-  .reward-card {
-    transition: transform 0.25s, box-shadow 0.25s;
-    cursor: pointer;
-  }
-  .reward-card:hover {
-    transform: translateY(-4px);
-  }
-  .reward-card.locked:hover {
-    transform: translateY(-2px);
+const Ic = ({ children, size = 22 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{children}</svg>
+);
+const ICONS = {
+  checkin: <><rect x="3.5" y="5" width="17" height="15" rx="3" /><path d="M8 3v4M16 3v4M3.5 10h17M9 15l2 2 4-4" /></>,
+  meet: <><circle cx="9" cy="8" r="3.5" /><path d="M2.5 20a6.5 6.5 0 0 1 13 0" /><circle cx="17" cy="9" r="2.5" /><path d="M17.5 14.2a5 5 0 0 1 4 4.8" /></>,
+  play: <><rect x="2.5" y="7" width="19" height="10" rx="5" /><path d="M8 10v4M6 12h4M16 11v.01M18 13v.01" /></>,
+  win: <><path d="M8 4h8v6a4 4 0 0 1-8 0z" /><path d="M12 14v4M8.5 20h7M8 6H4.5a3 3 0 0 0 3 4M16 6h3.5a3 3 0 0 1-3 4" /></>,
+};
+const iconFor = (id) => ICONS[id.startsWith("meet") ? "meet" : id.startsWith("play") ? "play" : id.startsWith("win") ? "win" : "checkin"];
+
+export default function Rewards({ user, token, points, onUserUpdate, onBuyCoins, onLogin, onNavigate }) {
+  const [data, setData] = useState(null);
+  const [state, setState] = useState("loading");   // loading | ok | error
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
+  const [now, setNow] = useState(Date.now());
+
+  const load = useCallback(async () => {
+    try { setData(await api("/api/rewards/daily", { token })); setState("ok"); }
+    catch { setState((s) => (s === "ok" ? s : "error")); }
+  }, [token]);
+
+  useEffect(() => { if (user && token) load(); }, [user && user.username, token, load]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // keep the "resets in" clock fresh; when the day rolls over, fetch the new tasks
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 30000);
+    return () => clearInterval(t);
+  }, []);
+  useEffect(() => { if (data && now > data.resetsAt) load(); }, [now]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function collect(task) {
+    setBusy(task.id); setErr("");
+    try {
+      const d = await api(`/api/rewards/daily/${task.id}/claim`, { method: "POST", token });
+      setData(d);
+      if (onUserUpdate && user) onUserUpdate({ ...user, coins: d.coins });
+    } catch (e) { setErr(e.message); load(); }
+    finally { setBusy(""); }
   }
 
-  .tier-btn {
-    cursor: pointer;
-    border: none;
-    background: none;
-    transition: all 0.2s;
+  if (!user) {
+    return (
+      <div className="trw"><style>{CSS}</style>
+        <div className="trw-card trw-solo"><h1>Rewards</h1><p>Sign in to see your coins and daily tasks.</p>
+          <button className="trw-btn trw-solid" onClick={onLogin}>Sign in</button></div>
+      </div>
+    );
   }
-  .tier-btn:hover { opacity: 0.9; }
 
-  ::-webkit-scrollbar { width: 4px; }
-  ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--sp-plat) 10%, transparent); border-radius: 2px; }
+  const coins = data ? data.coins : user.coins != null ? user.coins : 0;
+  const pts = typeof points === "number" ? points : user.points || 0;
+  const canPlay = coins >= MIN_COINS_TO_PLAY;
+  const doneCount = data ? data.tasks.filter((t) => t.claimed).length : 0;
 
-  @media (max-width: 768px) {
-    .rewards-grid { grid-template-columns: 1fr !important; }
-    .milestone-track { flex-direction: column !important; }
-    .milestone-line { width: 2px !important; height: 40px !important; }
-  }
-  @media (min-width: 769px) and (max-width: 1100px) {
-    .rewards-grid { grid-template-columns: repeat(2, 1fr) !important; }
-  }
+  let ri = 0;
+  RANKS.forEach(([, min], i) => { if (pts >= min) ri = i; });
+  const next = RANKS[ri + 1];
+  const frac = next ? (pts - RANKS[ri][1]) / (next[1] - RANKS[ri][1]) : 1;
+
+  return (
+    <div className="trw">
+      <style>{CSS}</style>
+      <h1 className="trw-h">Rewards</h1>
+
+      {/* balance */}
+      <section className="trw-card trw-bal">
+        <div className="trw-tiles">
+          <div><small>Coins</small><b>{Number(coins).toLocaleString()}</b></div>
+          <div><small>Points</small><b>{pts.toLocaleString()}</b></div>
+        </div>
+        <p className={`trw-can ${canPlay ? "ok" : "no"}`}>
+          {canPlay ? `You have enough coins to play. One game costs ${MIN_COINS_TO_PLAY}.` : `You need ${MIN_COINS_TO_PLAY} coins to play a game. You are ${MIN_COINS_TO_PLAY - coins} short.`}
+        </p>
+        <div className="trw-row">
+          {onBuyCoins && <button className="trw-btn trw-solid" onClick={onBuyCoins}>Buy coins</button>}
+          {onNavigate && <button className="trw-btn trw-ghost" onClick={() => onNavigate("match")}>Meet someone</button>}
+        </div>
+      </section>
+
+      {/* daily tasks */}
+      <section className="trw-card">
+        <div className="trw-head">
+          <div><h2>Daily tasks</h2><p>{data ? `${doneCount} of ${data.tasks.length} collected` : "Finish tasks to earn coins."}</p></div>
+          {data && <span className="trw-reset">Resets in {left(data.resetsAt - now)}</span>}
+        </div>
+
+        {state === "loading" && <p className="trw-note">Loading…</p>}
+        {state === "error" && <p className="trw-note">Couldn’t load your tasks. <button className="trw-link" onClick={load}>Try again</button></p>}
+
+        {data && (
+          <ul className="trw-tasks">
+            {data.tasks.map((t) => (
+              <li key={t.id} className={`trw-task ${t.claimed ? "done" : ""}`}>
+                <span className="trw-ico"><Ic>{iconFor(t.id)}</Ic></span>
+                <div className="trw-tx">
+                  <b>{t.title}</b>
+                  <small>{t.desc}</small>
+                  {!t.soon && t.goal > 1 && (
+                    <span className="trw-bar" role="progressbar" aria-valuemin={0} aria-valuemax={t.goal} aria-valuenow={t.progress} aria-label={`${t.title}: ${t.progress} of ${t.goal}`}>
+                      <i style={{ width: `${Math.round((t.progress / t.goal) * 100)}%` }} />
+                    </span>
+                  )}
+                  {!t.soon && t.goal > 1 && <small className="trw-prog">{t.progress} / {t.goal}</small>}
+                </div>
+                <div className="trw-act">
+                  <span className="trw-reward">+{t.reward} coins</span>
+                  {t.claimed ? <span className="trw-tag">Collected</span>
+                    : t.soon ? <span className="trw-tag">Coming soon</span>
+                    : t.claimable ? <button className="trw-btn trw-solid trw-sm" disabled={busy === t.id} onClick={() => collect(t)}>{busy === t.id ? "…" : "Collect"}</button>
+                    : <span className="trw-tag">In progress</span>}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+        {err && <p className="trw-err" role="alert">{err}</p>}
+      </section>
+
+      {/* how coins work */}
+      <section className="trw-card">
+        <h2>How coins work</h2>
+        <ul className="trw-rules">
+          <li>New accounts start with <b>{SIGNUP_COINS} coins</b>.</li>
+          <li>Playing a game costs <b>{MIN_COINS_TO_PLAY} coins</b> to enter, so you need at least {MIN_COINS_TO_PLAY} to play.</li>
+          <li>Win a game to earn coins, lose and you lose them. <span className="trw-dim">This starts with the new games.</span></li>
+          <li>Run low? Collect your daily tasks or buy more coins.</li>
+        </ul>
+      </section>
+
+      {/* rank ladder */}
+      <section className="trw-card">
+        <div className="trw-head">
+          <div><h2>Your rank</h2><p>{RANKS[ri][0]}{next ? ` · ${(next[1] - pts).toLocaleString()} points to ${next[0]}` : " · top rank"}</p></div>
+        </div>
+        <span className="trw-bar trw-bar-lg" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(frac * 100)} aria-label="Progress to the next rank"><i style={{ width: `${Math.round(frac * 100)}%` }} /></span>
+        <ol className="trw-ranks">
+          {RANKS.map(([name, min], i) => (
+            <li key={name} className={i <= ri ? "on" : ""}><span>{i <= ri ? "✓" : ""}</span><b>{name}</b><small>{min.toLocaleString()} pts</small></li>
+          ))}
+        </ol>
+      </section>
+    </div>
+  );
+}
+
+const CSS = `
+.trw{max-width:680px;margin:0 auto;color:var(--sp-plat);font-family:'Inter',system-ui,sans-serif}
+.trw *{box-sizing:border-box}
+.trw-h{margin:0 0 16px;font-family:'Space Grotesk',sans-serif;font-size:30px;font-weight:700;letter-spacing:-.3px}
+.trw-card{margin-bottom:14px;padding:20px;border:1px solid var(--sp-rim);border-radius:16px;background:var(--sp-surface)}
+.trw-card h2{margin:0;font-size:18px;font-weight:700}
+.trw-solo{text-align:center;padding:36px 20px}.trw-solo h1{margin:0 0 6px}.trw-solo p{margin:0 0 16px;color:var(--sp-ash)}
+.trw-tiles{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.trw-tiles div{padding:14px 16px;border:1px solid var(--sp-rim);border-radius:14px;background:var(--sp-surface2)}
+.trw-tiles small{display:block;color:var(--sp-ash);font-size:13px}
+.trw-tiles b{display:block;margin-top:2px;font-size:30px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.15}
+.trw-can{margin:14px 0 0;font-size:14px;line-height:1.45}
+.trw-can.ok{color:var(--sp-ice)}.trw-can.no{color:var(--sp-live)}
+.trw-row{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}
+.trw-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:6px}
+.trw-head p{margin:2px 0 0;color:var(--sp-ash);font-size:14px}
+.trw-reset{flex:none;padding:5px 11px;border-radius:999px;background:var(--sp-surface2);border:1px solid var(--sp-rim);color:var(--sp-ash);font-size:12px;font-weight:600}
+.trw-note{margin:12px 0 0;color:var(--sp-ash);font-size:14px}
+.trw-tasks{margin:6px 0 0;padding:0;list-style:none}
+.trw-task{display:flex;align-items:center;gap:14px;padding:14px 0;border-top:1px solid var(--sp-rim)}
+.trw-task:first-child{border-top:0}
+.trw-ico{display:grid;place-items:center;flex:none;width:44px;height:44px;border-radius:50%;background:color-mix(in srgb,var(--sp-signal) 12%,transparent);color:var(--sp-signal)}
+.trw-task.done .trw-ico{background:color-mix(in srgb,var(--sp-ice) 16%,transparent);color:var(--sp-ice)}
+.trw-tx{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.trw-tx b{font-size:15px;font-weight:600}
+.trw-tx small{color:var(--sp-ash);font-size:13px;line-height:1.4}
+.trw-prog{font-variant-numeric:tabular-nums}
+.trw-bar{display:block;height:6px;margin-top:6px;border-radius:99px;background:var(--sp-rim);overflow:hidden}
+.trw-bar i{display:block;height:100%;border-radius:99px;background:var(--sp-signal)}
+.trw-bar-lg{height:8px;margin:10px 0 14px}
+.trw-act{flex:none;display:flex;flex-direction:column;align-items:flex-end;gap:6px}
+.trw-reward{color:var(--sp-gold);font-size:13px;font-weight:700;white-space:nowrap}
+.trw-tag{padding:4px 10px;border-radius:999px;background:var(--sp-surface2);color:var(--sp-ash);font-size:12px;font-weight:600;white-space:nowrap}
+.trw-err{margin:10px 0 0;color:var(--sp-live);font-size:14px}
+.trw-rules{margin:10px 0 0;padding:0 0 0 20px;color:var(--sp-plat);font-size:14.5px;line-height:1.6}
+.trw-rules li{margin-bottom:4px}.trw-dim{color:var(--sp-ash)}
+.trw-ranks{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:0;padding:0;list-style:none}
+.trw-ranks li{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--sp-rim);border-radius:12px;color:var(--sp-ash)}
+.trw-ranks li span{display:grid;place-items:center;flex:none;width:22px;height:22px;border-radius:50%;border:2px solid var(--sp-rim);font-size:12px;font-weight:700;color:#fff}
+.trw-ranks li.on{color:var(--sp-plat)}.trw-ranks li.on span{background:var(--sp-signal);border-color:var(--sp-signal)}
+.trw-ranks b{flex:1;font-size:14px;font-weight:600}.trw-ranks small{font-size:12px}
+
+/* buttons: ".trw .x" is stronger than the app frame's "button{color:inherit}" rule, so the text colour sticks */
+.trw .trw-btn{display:inline-flex;align-items:center;justify-content:center;padding:10px 18px;border:0;border-radius:8px;font:inherit;font-size:14px;font-weight:600;cursor:pointer;transition:background .15s,opacity .15s}
+.trw .trw-btn:disabled{opacity:.55;cursor:not-allowed}
+.trw .trw-solid{background:var(--sp-signal);color:#fff}.trw .trw-solid:hover:not(:disabled){background:color-mix(in srgb,var(--sp-signal) 88%,#000)}
+.trw .trw-ghost{background:var(--sp-surface2);color:var(--sp-plat);border:1px solid var(--sp-rim)}.trw .trw-ghost:hover{background:var(--sp-rim)}
+.trw .trw-sm{padding:7px 16px;font-size:13px}
+.trw .trw-link{padding:0;border:0;background:none;color:var(--sp-signal);font:inherit;font-weight:600;text-decoration:underline;cursor:pointer}
+.trw button:focus-visible{outline:2px solid var(--sp-signal);outline-offset:2px}
+@media (max-width:520px){.trw-card{padding:16px}.trw-h{font-size:26px}.trw-ranks{grid-template-columns:1fr}.trw-task{align-items:flex-start}}
 `;
-
-const BG = `linear-gradient(to right,
-  var(--sp-void) 0%,var(--sp-void) 12.5%,var(--sp-surface) 12.5%,var(--sp-surface) 25%,
-  var(--sp-surface2) 25%,var(--sp-surface2) 37.5%,var(--sp-surface) 37.5%,var(--sp-surface) 50%,
-  var(--sp-surface) 50%,var(--sp-surface) 62.5%,var(--sp-surface2) 62.5%,var(--sp-surface2) 75%,
-  var(--sp-surface2) 75%,var(--sp-surface2) 87.5%,var(--sp-surface2) 87.5%,var(--sp-surface2) 100%)`;
-
-/* ── User State (replace with real auth context later) ── */
-
-/* ── Reward tiers ── */
-/*
-  TEACH: Each object in this array is one reward card.
-  'threshold' = points needed to unlock it.
-  'tier' = visual color tier (bronze/silver/gold/diamond)
-  'perks' = array of strings shown inside the card.
-  This is a pure data structure — the JSX just loops over it.
-*/
-const REWARD_TIERS = [
-  {
-    id: "bronze",
-    threshold: 100,
-    tier: "bronze",
-    label: "Bronze Cache",
-    emoji: "🪙",
-    tagline: "// your first win, officially",
-    color: "#cd7f32",
-    glow: "rgba(205,127,50,0.35)",
-    border: "rgba(205,127,50,0.3)",
-    perks: [
-      { icon: "🎨", text: "Animated bronze avatar ring" },
-      { icon: "🔈", text: "3 custom sound effects in-call" },
-      { icon: "🃏", text: "5 reaction emotes unlocked" },
-      { icon: "🏷️", text: "Bronze rank badge on profile" },
-    ],
-  },
-  {
-    id: "silver",
-    threshold: 500,
-    tier: "silver",
-    label: "Silver Drop",
-    emoji: "🥈",
-    tagline: "// people are starting to notice",
-    color: "#b0bec5",
-    glow: "rgba(176,190,197,0.3)",
-    border: "rgba(176,190,197,0.25)",
-    perks: [
-      { icon: "🌀", text: "Animated silver ring + glow trail" },
-      { icon: "🎙️", text: "Voice changer toggle in-call (3 modes)" },
-      { icon: "🃏", text: "12 reaction emotes unlocked" },
-      { icon: "📎", text: "Clip & share button (30-sec auto-clip)" },
-      { icon: "🕶️", text: "Username color: silver chrome" },
-    ],
-  },
-  {
-    id: "gold",
-    threshold: 1000,
-    tier: "gold",
-    label: "Gold Vault",
-    emoji: "🏆",
-    tagline: "// this is where it gets real",
-    color: "var(--sp-gold)",
-    glow: "color-mix(in srgb, var(--sp-gold) 40%, transparent)",
-    border: "color-mix(in srgb, var(--sp-gold) 35%, transparent)",
-    perks: [
-      { icon: "✨", text: "Animated gold ring + particle burst on win" },
-      { icon: "🎬", text: "Crowd can clip & share your moments" },
-      { icon: "🏆", text: "Leaderboard gold crown icon" },
-      { icon: "🃏", text: "All 28 reaction emotes + custom one" },
-      { icon: "🚀", text: "Priority matchmaking queue" },
-      { icon: "🎮", text: "Early access to new game modes" },
-    ],
-  },
-  {
-    id: "diamond",
-    threshold: 5000,
-    tier: "diamond",
-    label: "Diamond Protocol",
-    emoji: "💎",
-    tagline: "// top 1%. no explanation needed.",
-    color: "color-mix(in srgb, var(--sp-signal) 55%, #6fd8ff)",
-    glow: "rgba(0,212,255,0.4)",
-    border: "rgba(0,212,255,0.3)",
-    perks: [
-      { icon: "💎", text: "Diamond animated ring + screen aura" },
-      { icon: "🌍", text: "Featured on global homepage for 24h" },
-      { icon: "🎙️", text: "Host your own crowd rooms (up to 500)" },
-      { icon: "🏷️", text: "Custom username tag & profile banner" },
-      { icon: "💬", text: "Your highlights in Tranzle's socials" },
-      { icon: "🛡️", text: "Verified creator badge" },
-      { icon: "📊", text: "Full match analytics dashboard" },
-    ],
-  },
-];
-
-/* ── Milestone track ── */
-const MILESTONES = [
-  { pts: 0,    label: "Start",      color: "var(--sp-ghost)" },
-  { pts: 100,  label: "🪙 Bronze",  color: "#cd7f32" },
-  { pts: 500,  label: "🥈 Silver",  color: "#b0bec5" },
-  { pts: 1000, label: "🏆 Gold",    color: "var(--sp-gold)" },
-  { pts: 5000, label: "💎 Diamond", color: "color-mix(in srgb, var(--sp-signal) 55%, #6fd8ff)" },
-];
-
-/* ── Shimmer text ── */
-function ShimmerText({ children, color1 = "var(--sp-signal)", color2 = "color-mix(in srgb, var(--sp-signal) 55%, #6fd8ff)" }) {
-  return (
-    <span style={{
-      background: `linear-gradient(90deg, ${color1}, ${color2}, ${color1})`,
-      backgroundSize: "200% auto",
-      WebkitBackgroundClip: "text",
-      WebkitTextFillColor: "transparent",
-      backgroundClip: "text",
-      display: "inline-block",
-    }}>{children}</span>
-  );
-}
-
-/* ── Gold shimmer for gold tier ── */
-function GoldText({ children }) {
-  return (
-    <span style={{
-      background: "linear-gradient(90deg, var(--sp-gold), #ffaa00, var(--sp-gold))",
-      backgroundSize: "200% auto",
-      WebkitBackgroundClip: "text",
-      WebkitTextFillColor: "transparent",
-      backgroundClip: "text",
-      display: "inline-block",
-    }}>{children}</span>
-  );
-}
-
-/* ── Floating orb ── */
-function Orb({ x, y, size, color, delay = 0, dur = 7 }) {
-  return (
-    <div style={{
-      position: "fixed", left: `${x}%`, top: `${y}%`,
-      width: size, height: size,
-      borderRadius: "50%",
-      background: `radial-gradient(circle at 35% 35%, ${tint(color,"33")}, transparent 70%)`,
-      filter: "blur(60px)",
-      pointerEvents: "none", zIndex: 0,
-    }} />
-  );
-}
-
-/* ── Progress bar ── */
-function ProgressBar({ value, max, color, delay = 0 }) {
-  const pct = Math.min((value / max) * 100, 100);
-  return (
-    <div style={{ height: 6, borderRadius: 99, background: "color-mix(in srgb, var(--sp-plat) 7%, transparent)", overflow: "hidden" }}>
-      <div style={{
-        height: "100%", borderRadius: 99,
-        width: `${pct}%`,
-        background: `linear-gradient(90deg, ${tint(color,"88")}, ${color})`,
-        boxShadow: `0 0 10px ${tint(color,"55")}`,
-      }} />
-    </div>
-  );
-}
-
-/* ── Single reward card ── */
-function RewardCard({ tier, userPoints, delay = 0, onSelect }) {
-  const unlocked = userPoints >= tier.threshold;
-  const current = userPoints < tier.threshold &&
-    (REWARD_TIERS.findIndex(t => t.id === tier.id) === 0 ||
-      userPoints >= REWARD_TIERS[REWARD_TIERS.findIndex(t => t.id === tier.id) - 1].threshold);
-
-  /*
-    TEACH: "unlocked" and "current" are derived booleans.
-    Derived = calculated from existing state, not stored separately.
-    Rule: never store what you can calculate.
-  */
-
-  return (
-    <div
-      className={`reward-card${unlocked ? "" : " locked"}`}
-      onClick={() => onSelect(tier)}
-      style={{
-        background: unlocked
-          ? `linear-gradient(135deg, ${tint(tier.color,"0a")}, color-mix(in srgb, var(--sp-plat) 2.5%, transparent))`
-          : "color-mix(in srgb, var(--sp-plat) 1.8%, transparent)",
-        border: `1px solid ${unlocked ? tier.border : "color-mix(in srgb, var(--sp-plat) 6%, transparent)"}`,
-        borderRadius: 18,
-        padding: "28px 24px",
-        position: "relative",
-        overflow: "hidden",
-      }}
-    >
-      {/* Lock overlay on locked cards */}
-      {!unlocked && (
-        <div style={{
-          position: "absolute", inset: 0, borderRadius: 17,
-          background: "rgba(10,10,12,0.45)",
-          display: "flex", alignItems: "flex-end", justifyContent: "flex-end",
-          padding: 14, pointerEvents: "none", zIndex: 2,
-        }}>
-          <span style={{ fontSize: 18, opacity: 0.3 }}>🔒</span>
-        </div>
-      )}
-
-      {/* Header */}
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 20 }}>
-        <div>
-          <div style={{ fontSize: 32, marginBottom: 6, filter: unlocked ? "none" : "grayscale(0.7) opacity(0.5)" }}>
-            {tier.emoji}
-          </div>
-          <div style={{
-            fontFamily: "'Space Grotesk', sans-serif",
-            fontSize: 22, letterSpacing: 1.5,
-            color: unlocked ? tier.color : "var(--sp-ghost)",
-          }}>
-            {tier.id === "gold" && unlocked ? <GoldText>{tier.label}</GoldText> : tier.label}
-          </div>
-          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: "var(--sp-ghost)", marginTop: 4 }}>
-            {tier.tagline}
-          </div>
-        </div>
-
-        <div style={{
-          background: unlocked ? `${tint(tier.color,"15")}` : "color-mix(in srgb, var(--sp-plat) 4%, transparent)",
-          border: `1px solid ${unlocked ? tier.border : "color-mix(in srgb, var(--sp-plat) 7%, transparent)"}`,
-          borderRadius: 10, padding: "6px 12px", textAlign: "right",
-          flexShrink: 0,
-        }}>
-          <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 22, color: unlocked ? tier.color : "var(--sp-rim)", letterSpacing: 1 }}>
-            {tier.threshold.toLocaleString()}
-          </div>
-          <div style={{ fontSize: 9, color: "var(--sp-ghost)", letterSpacing: 1.5, textTransform: "uppercase" }}>pts</div>
-        </div>
-      </div>
-
-      {/* Progress (only on current / next tier) */}
-      {!unlocked && current && (
-        <div style={{ marginBottom: 16 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "var(--sp-ghost)", marginBottom: 6 }}>
-            <span style={{ fontFamily: "'JetBrains Mono', monospace" }}>your progress</span>
-            <span style={{ color: tier.color }}>{userPoints} / {tier.threshold}</span>
-          </div>
-          <ProgressBar value={userPoints} max={tier.threshold} color={tier.color} delay={delay + 0.3} />
-          <div style={{ fontSize: 10, color: "var(--sp-ghost)", marginTop: 6, fontFamily: "'JetBrains Mono', monospace" }}>
-            {Math.max(0, tier.threshold - userPoints)} pts to unlock
-          </div>
-        </div>
-      )}
-
-      {/* Perks */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        {tier.perks.map((perk, i) => (
-          <div key={i} style={{
-            display: "flex", alignItems: "center", gap: 10,
-            opacity: unlocked ? 1 : 0.35,
-          }}>
-            <span style={{ fontSize: 14, flexShrink: 0 }}>{perk.icon}</span>
-            <span style={{ fontSize: 12.5, color: unlocked ? "var(--sp-ash)" : "var(--sp-ghost)", lineHeight: 1.4 }}>{perk.text}</span>
-            {unlocked && <span style={{ marginLeft: "auto", fontSize: 11, color: tier.color, flexShrink: 0 }}>✓</span>}
-          </div>
-        ))}
-      </div>
-
-      {/* Unlocked badge */}
-      {unlocked && (
-        <div style={{
-          marginTop: 20,
-          background: `${tint(tier.color,"15")}`,
-          border: `1px solid ${tier.border}`,
-          borderRadius: 8, padding: "8px 14px",
-          display: "flex", alignItems: "center", gap: 8,
-        }}>
-          <div style={{ width: 6, height: 6, borderRadius: "50%", background: tier.color, boxShadow: `0 0 8px ${tier.color}` }} />
-          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: tier.color }}>UNLOCKED — active on your profile</span>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ── Milestone track ── */
-/*
-  TEACH: This component maps over the MILESTONES array to draw a visual
-  progress timeline. It uses index to determine if each milestone is
-  "past", "current", or "future" relative to the user's points.
-*/
-function MilestoneTrack({ userPoints, rank }) {
-  return (
-    <div style={{
-      background: "color-mix(in srgb, var(--sp-plat) 2%, transparent)",
-      border: "1px solid color-mix(in srgb, var(--sp-plat) 6%, transparent)",
-      borderRadius: 16, padding: "24px 28px",
-      marginBottom: 48,
-    }}>
-      <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: "var(--sp-ghost)", letterSpacing: 3, marginBottom: 24, textTransform: "uppercase" }}>
-        // your journey
-      </div>
-
-      {/* Desktop: horizontal track */}
-      <div className="milestone-track" style={{ display: "flex", alignItems: "center" }}>
-        {MILESTONES.map((m, i) => {
-          const reached = userPoints >= m.pts;
-          const isCurrent = i < MILESTONES.length - 1 &&
-            userPoints >= m.pts && userPoints < MILESTONES[i + 1].pts;
-
-          return (
-            <div key={m.pts} style={{ display: "flex", alignItems: "center", flex: i < MILESTONES.length - 1 ? 1 : 0 }}>
-              {/* Node */}
-              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, flexShrink: 0 }}>
-                <div style={{
-                  width: 36, height: 36, borderRadius: "50%",
-                  background: reached ? `${tint(m.color,"20")}` : "color-mix(in srgb, var(--sp-plat) 4%, transparent)",
-                  border: `2px solid ${reached ? m.color : "color-mix(in srgb, var(--sp-plat) 8%, transparent)"}`,
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  fontSize: 14, boxShadow: reached ? `0 0 16px ${tint(m.color,"44")}` : "none",
-                  transition: "all 0.3s",
-                }}>
-                  {reached ? "✓" : i === 0 ? "●" : "○"}
-                </div>
-                <div style={{ fontSize: 11, color: reached ? m.color : "var(--sp-ghost)", whiteSpace: "nowrap", textAlign: "center" }}>
-                  {m.label}
-                </div>
-                <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: "var(--sp-rim)" }}>
-                  {m.pts === 0 ? "—" : m.pts.toLocaleString()}
-                </div>
-              </div>
-
-              {/* Line between nodes */}
-              {i < MILESTONES.length - 1 && (
-                <div className="milestone-line" style={{
-                  flex: 1, height: 2, margin: "0 8px", marginBottom: 28,
-                  background: `linear-gradient(90deg, ${reached ? m.color : "color-mix(in srgb, var(--sp-plat) 6%, transparent)"}, ${userPoints >= MILESTONES[i + 1].pts ? MILESTONES[i + 1].color : "color-mix(in srgb, var(--sp-plat) 6%, transparent)"})`,
-                  borderRadius: 1,
-                  transition: "background 0.4s",
-                }} />
-              )}
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Current position label */}
-      <div style={{ marginTop: 20, paddingTop: 16, borderTop: "1px solid color-mix(in srgb, var(--sp-plat) 5%, transparent)", display: "flex", alignItems: "center", gap: 10 }}>
-        <div style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--sp-signal)", boxShadow: "0 0 10px var(--sp-signal)" }} />
-        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: "var(--sp-ghost)" }}>
-          you are here → <span style={{ color: "var(--sp-signal)" }}>{userPoints} pts</span> · {rank} · next tier at <span style={{ color: "color-mix(in srgb, var(--sp-signal) 55%, #6fd8ff)" }}>100 pts</span>
-        </span>
-      </div>
-    </div>
-  );
-}
-
-/* ── Detail Modal ── */
-function RewardModal({ tier, userPoints, onClose }) {
-  const unlocked = userPoints >= tier.threshold;
-
-  // Close on backdrop click
-  const handleBackdrop = (e) => {
-    if (e.target === e.currentTarget) onClose();
-  };
-
-  return (
-    <div
-      onClick={handleBackdrop}
-      style={{
-        position: "fixed", inset: 0, zIndex: 500,
-        background: "rgba(0,0,0,0.75)", backdropFilter: "blur(12px)",
-        display: "flex", alignItems: "center", justifyContent: "center",
-        padding: 20,
-      }}
-    >
-      <div style={{
-        background: "var(--sp-void)",
-        border: `1px solid ${tier.border}`,
-        borderRadius: 20, padding: "36px 32px",
-        maxWidth: 480, width: "100%",
-        position: "relative",
-        boxShadow: `0 0 60px ${tier.glow}`,
-        animation: "rewardReveal 0.35s both",
-        maxHeight: "85vh", overflowY: "auto",
-      }}>
-        {/* Scanline */}
-
-        <button onClick={onClose} style={{ position: "absolute", top: 16, right: 16, background: "color-mix(in srgb, var(--sp-plat) 6%, transparent)", border: "none", borderRadius: "50%", width: 32, height: 32, color: "var(--sp-ghost)", cursor: "pointer", fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
-
-        <div style={{ fontSize: 48, marginBottom: 12 }}>{tier.emoji}</div>
-        <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 32, letterSpacing: 2, color: tier.color, marginBottom: 4 }}>
-          {tier.label}
-        </div>
-        <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: "var(--sp-ghost)", marginBottom: 28 }}>
-          {tier.tagline}
-        </div>
-
-        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          {tier.perks.map((perk, i) => (
-            <div key={i} style={{
-              display: "flex", alignItems: "flex-start", gap: 14,
-              background: "color-mix(in srgb, var(--sp-plat) 3%, transparent)",
-              border: "1px solid color-mix(in srgb, var(--sp-plat) 6%, transparent)",
-              borderRadius: 10, padding: "12px 16px",
-              opacity: unlocked ? 1 : 0.4,
-            }}>
-              <span style={{ fontSize: 20, flexShrink: 0 }}>{perk.icon}</span>
-              <span style={{ fontSize: 13, color: "var(--sp-ash)", lineHeight: 1.5 }}>{perk.text}</span>
-              {unlocked && <span style={{ marginLeft: "auto", color: tier.color, fontSize: 14, flexShrink: 0 }}>✓</span>}
-            </div>
-          ))}
-        </div>
-
-        <div style={{ marginTop: 24, padding: "16px 20px", background: unlocked ? `${tint(tier.color,"10")}` : "color-mix(in srgb, var(--sp-plat) 4%, transparent)", border: `1px solid ${unlocked ? tier.border : "color-mix(in srgb, var(--sp-plat) 6%, transparent)"}`, borderRadius: 12 }}>
-          {unlocked ? (
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <div style={{ width: 8, height: 8, borderRadius: "50%", background: tier.color, boxShadow: `0 0 10px ${tier.color}` }} />
-              <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: tier.color }}>All perks active on your profile</span>
-            </div>
-          ) : (
-            <div>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "var(--sp-ghost)", marginBottom: 8 }}>
-                <span style={{ fontFamily: "'JetBrains Mono', monospace" }}>progress to unlock</span>
-                <span style={{ color: tier.color }}>{userPoints} / {tier.threshold} pts</span>
-              </div>
-              <ProgressBar value={userPoints} max={tier.threshold} color={tier.color} />
-              <div style={{ fontSize: 11, color: "var(--sp-ghost)", marginTop: 8 }}>
-                {Math.max(0, tier.threshold - userPoints)} more points needed — keep playing
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ── Ticker ── */
-/* ═══════════════════════════════════════════════
-   MAIN EXPORT
-═══════════════════════════════════════════════ */
-export default function Rewards({ onNavigate, user, points }) {
-  const [selectedTier, setSelectedTier] = useState(null);
-  const [filterUnlocked, setFilterUnlocked] = useState("all"); // "all" | "unlocked" | "locked"
-
-  /*
-    TEACH: onNavigate is a prop passed from the parent (Tranzle_Main).
-    Props flow DOWN from parent to child. This lets child components
-    trigger page navigation without owning the state themselves.
-    If this page is viewed standalone (no parent), onNavigate is undefined — 
-    the buttons just don't do anything harmful.
-  */
-
-  const userPoints = typeof points === "number" ? points : (user && user.points) || 0;
-  const rank = (user && user.rank) || "Bronze I";
-
-  const filtered = REWARD_TIERS.filter(t => {
-    if (filterUnlocked === "unlocked") return userPoints >= t.threshold;
-    if (filterUnlocked === "locked") return userPoints < t.threshold;
-    return true;
-  });
-
-  return (
-    <div style={{ position: "relative", maxWidth: 1100, margin: "0 auto" }}>
-      <style>{css}</style>
-
-      {/* Background orbs */}
-
-      {/* Main content */}
-      <div style={{ position: "relative", zIndex: 1, maxWidth: 1100, margin: "0 auto", padding: "clamp(80px,12vw,120px) clamp(16px,5vw,60px) 120px" }}>
-
-        {/* Header */}
-        <div style={{ marginBottom: 48 }}>
-          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: "var(--sp-ghost)", letterSpacing: 4, textTransform: "uppercase", marginBottom: 10 }}>
-            // what you unlock for not being bad at this
-          </div>
-          <h1 style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: "clamp(48px,10vw,88px)", letterSpacing: 2, lineHeight: 0.95, marginBottom: 16 }}>
-            <ShimmerText>REWARDS</ShimmerText>
-          </h1>
-          <p style={{ fontSize: "clamp(13px,2vw,15px)", color: "var(--sp-ghost)", maxWidth: 480, lineHeight: 1.6 }}>
-            Play games. Win points. Hit thresholds. Unlock perks that actually matter — not fake digital stickers.
-          </p>
-        </div>
-
-        {/* User progress snapshot */}
-        <div style={{
-          background: "color-mix(in srgb, var(--sp-plat) 2.5%, transparent)",
-          border: "1px solid color-mix(in srgb, var(--sp-plat) 6%, transparent)",
-          borderRadius: 16, padding: "20px 24px",
-          marginBottom: 36,
-          display: "flex", alignItems: "center", gap: 20,
-          flexWrap: "wrap",
-        }}>
-          <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 48, color: "var(--sp-gold)", lineHeight: 1, textShadow: "0 0 24px color-mix(in srgb, var(--sp-gold) 40%, transparent)" }}>
-            {userPoints}
-          </div>
-          <div>
-            <div style={{ fontSize: 12, color: "var(--sp-ash)", marginBottom: 4 }}>your points · {rank}</div>
-            <div style={{ width: 220 }}>
-              <ProgressBar value={userPoints} max={100} color="var(--sp-gold)" delay={0.3} />
-            </div>
-            <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: "var(--sp-ghost)", marginTop: 6 }}>
-              {Math.max(0, 100 - userPoints)} pts to first reward (Bronze Cache)
-            </div>
-          </div>
-          <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {onNavigate && (
-              <button
-                onClick={() => onNavigate("play")}
-                style={{
-                  background: "linear-gradient(135deg,var(--sp-signal),color-mix(in srgb, var(--sp-signal) 55%, #6fd8ff))",
-                  border: "none", borderRadius: 10,
-                  color: "#fff", fontFamily: "'Space Grotesk',sans-serif",
-                  fontSize: 15, letterSpacing: 1.5,
-                  padding: "10px 22px", cursor: "pointer",
-                  boxShadow: "0 0 16px rgba(0,245,160,0.3)",
-                }}
-              >PLAY NOW →</button>
-            )}
-          </div>
-        </div>
-
-        {/* Ticker */}
-
-        {/* Milestone track */}
-        <MilestoneTrack userPoints={userPoints} rank={rank} />
-
-        {/* Filter buttons */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 32, flexWrap: "wrap" }}>
-          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: "var(--sp-ghost)", marginRight: 4 }}>show:</span>
-          {[["all", "All tiers"], ["unlocked", "Unlocked"], ["locked", "Locked"]].map(([val, label]) => (
-            <button
-              key={val}
-              className="tier-btn"
-              onClick={() => setFilterUnlocked(val)}
-              style={{
-                padding: "7px 16px", borderRadius: 8, fontSize: 12,
-                color: filterUnlocked === val ? "#fff" : "var(--sp-ghost)",
-                background: filterUnlocked === val ? "var(--sp-signal)" : "color-mix(in srgb, var(--sp-plat) 4%, transparent)",
-                border: `1px solid ${filterUnlocked === val ? "var(--sp-signal)" : "color-mix(in srgb, var(--sp-plat) 7%, transparent)"}`,
-                fontFamily: "'Inter', sans-serif", fontWeight: 600,
-              }}
-            >{label}</button>
-          ))}
-        </div>
-
-        {/* Reward cards grid */}
-        <div
-          className="rewards-grid"
-          style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 20 }}
-        >
-          {filtered.map((tier, i) => (
-            <RewardCard
-              key={tier.id}
-              tier={tier}
-              userPoints={userPoints}
-              delay={i * 0.08}
-              onSelect={setSelectedTier}
-            />
-          ))}
-        </div>
-
-        {/* Bottom note */}
-        <div style={{ marginTop: 56, textAlign: "center" }}>
-          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: "var(--sp-rim)", marginBottom: 10 }}>
-            // points earned by winning wagers in live games. no purchases. no shortcuts.
-          </div>
-          <div style={{ fontSize: 12, color: "var(--sp-ghost)" }}>
-            Rewards are automatically applied to your account when you cross each threshold.
-          </div>
-        </div>
-
-      </div>
-
-      {/* Modal */}
-      {selectedTier && (
-        <RewardModal tier={selectedTier} userPoints={userPoints} onClose={() => setSelectedTier(null)} />
-      )}
-    </div>
-  );
-}

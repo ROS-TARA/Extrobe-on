@@ -1495,7 +1495,17 @@ export default function StrangerPlay() {
         />
       )}
 
-      {page === "rewards"  && <Rewards  onNavigate={goTo} user={user} points={points} />}
+      {page === "rewards" && (
+        <Rewards
+          user={user}
+          token={localStorage.getItem("tz_token")}
+          points={points}
+          onUserUpdate={handleUserUpdate}
+          onBuyCoins={buyCoins}
+          onLogin={goLogin}
+          onNavigate={goTo}
+        />
+      )}
       {page === "settings" && <Settings onNavigate={navTo} user={user} token={localStorage.getItem("tz_token")} onLogout={handleLogout} onUserUpdate={handleUserUpdate} theme={theme} onToggleTheme={toggleTheme} />}
       {page === "messages" && (
         <Messages

@@ -96,6 +96,14 @@ mongoose.connect(process.env.MONGO_URI || "mongodb://localhost:27017/tranzle")
     console.error(e);
   });
 
+/* ─────────────────────────────────────────────
+   COIN RULES (edit the numbers here, nowhere else)
+   - A new account starts with SIGNUP_COINS coins.
+   - One game costs MIN_COINS_TO_PLAY coins to enter, so you need at least that many to play.
+───────────────────────────────────────────── */
+const SIGNUP_COINS = 25;
+const MIN_COINS_TO_PLAY = 5;
+
 const UserSchema = new mongoose.Schema({
   name:        { type: String, required: true },
   username:    { type: String, required: true, unique: true, lowercase: true },
@@ -104,7 +112,15 @@ const UserSchema = new mongoose.Schema({
   flag:        { type: String, default: "🌍" },
   country:     { type: String, default: "" },
   points:      { type: Number, default: 0 },
-  coins:       { type: Number, default: 20 }, // free starter coins so new players aren't stuck
+  coins:       { type: Number, default: SIGNUP_COINS }, // starter coins for new accounts (see COIN RULES above)
+  // today's progress for the daily tasks; it resets by itself when the day changes (see DAILY TASKS)
+  daily: {
+    day:     { type: String, default: "" },
+    met:     { type: [String], default: [] },   // different people matched today
+    games:   { type: Number, default: 0 },
+    wins:    { type: Number, default: 0 },
+    claimed: { type: [String], default: [] },   // task ids already collected today
+  },
   wins:        { type: Number, default: 0 },
   gamesPlayed: { type: Number, default: 0 },
   followers:   { type: Number, default: 0 },
@@ -391,7 +407,7 @@ app.post("/api/auth/signup", async (req, res) => {
     const user = await User.create({
       name, username: username.toLowerCase(), email: email.toLowerCase(),
       password: hash, flag: flag || "🌍", country: country || "",
-      points: 0, wins: 0, gamesPlayed: 0,
+      points: 0, wins: 0, gamesPlayed: 0, coins: SIGNUP_COINS,
     });
 
     const token = signToken(user._id);
@@ -620,6 +636,104 @@ app.patch("/api/user/settings", auth, async (req, res) => {
     res.json(safeUser(user));
   } catch (e) {
     console.error("settings update error:", e);
+    res.status(500).json({ error: "server error" });
+  }
+});
+
+/* ─────────────────────────────────────────────
+   DAILY TASKS — real progress kept on the server, coins paid by the server only.
+   Change a reward or a goal by editing DAILY_TASKS. Nothing else needs to change.
+───────────────────────────────────────────── */
+// BEGIN DAILY
+const DAILY_OFFSET_MIN = Number.isFinite(Number(process.env.DAILY_RESET_OFFSET_MIN)) && process.env.DAILY_RESET_OFFSET_MIN !== undefined && process.env.DAILY_RESET_OFFSET_MIN !== ""
+  ? Number(process.env.DAILY_RESET_OFFSET_MIN) : 345;   // minutes after UTC when "your day" starts; 345 = Nepal (UTC+5:45)
+// Game tasks stay locked ("coming soon") until game results are decided by the server, not by the players' browsers.
+// Set GAME_TASKS_LIVE=1 in Render only after that is built.
+const GAME_TASKS_LIVE = process.env.GAME_TASKS_LIVE === "1";
+
+const DAILY_TASKS = [
+  { id: "checkin", title: "Daily check-in",  desc: "Open Tranzle today.",                 goal: 1,  reward: 2,  counter: null },
+  { id: "meet3",   title: "Meet 3 people",   desc: "Get matched with 3 different people.", goal: 3,  reward: 3,  counter: "met" },
+  { id: "meet10",  title: "Meet 10 people",  desc: "Get matched with 10 different people.", goal: 10, reward: 8,  counter: "met" },
+  { id: "play3",   title: "Play 3 games",    desc: "Finish 3 games today.",               goal: 3,  reward: 5,  counter: "games", needsGames: true },
+  { id: "play10",  title: "Play 10 games",   desc: "Finish 10 games today.",              goal: 10, reward: 15, counter: "games", needsGames: true },
+  { id: "win3",    title: "Win 3 games",     desc: "Win 3 games today.",                  goal: 3,  reward: 10, counter: "wins",  needsGames: true },
+];
+
+// "2025-01-31" for the current day in the reset time zone
+function dailyKey(now = Date.now()) {
+  return new Date(now + DAILY_OFFSET_MIN * 60000).toISOString().slice(0, 10);
+}
+// the moment (ms) the current day ends
+function nextResetAt(now = Date.now()) {
+  return Date.parse(dailyKey(now) + "T00:00:00Z") + 86400000 - DAILY_OFFSET_MIN * 60000;
+}
+// start a fresh day for this user if their saved day is old; returns today's key
+async function rollDaily(userId) {
+  const day = dailyKey();
+  await User.updateOne(
+    { _id: userId, "daily.day": { $ne: day } },
+    { $set: { daily: { day, met: [], games: 0, wins: 0, claimed: [] } } }
+  );
+  return day;
+}
+// count one thing for today ("met" needs the other person's id so the same person counts once)
+async function bumpDaily(userId, field, otherId) {
+  if (!userId) return;
+  try {
+    await rollDaily(userId);
+    const upd = field === "met" ? { $addToSet: { "daily.met": String(otherId) } } : { $inc: { ["daily." + field]: 1 } };
+    await User.updateOne({ _id: userId }, upd);
+  } catch (e) { console.error("daily bump failed:", e.message); }
+}
+// what the app shows: each task with real progress
+function dailyView(user, now = Date.now()) {
+  const day = dailyKey(now);
+  const d = user.daily && user.daily.day === day ? user.daily : null;
+  const tasks = DAILY_TASKS.map((t) => {
+    const soon = !!t.needsGames && !GAME_TASKS_LIVE;
+    const raw = t.counter === "met" ? (d ? d.met.length : 0) : t.counter ? (d ? d[t.counter] || 0 : 0) : 1;
+    const progress = Math.min(t.goal, raw);
+    const claimed = !!(d && d.claimed.includes(t.id));
+    return { id: t.id, title: t.title, desc: t.desc, goal: t.goal, reward: t.reward, progress, claimed, soon, claimable: !soon && !claimed && progress >= t.goal };
+  });
+  return { day, resetsAt: nextResetAt(now), coins: user.coins, tasks };
+}
+// END DAILY
+
+// GET /api/rewards/daily — today's tasks and my progress
+app.get("/api/rewards/daily", auth, async (req, res) => {
+  try {
+    await rollDaily(req.userId);
+    const user = await User.findById(req.userId).select("coins daily");
+    if (!user) return res.status(404).json({ error: "user not found" });
+    res.set("Cache-Control", "no-store");
+    res.json(dailyView(user));
+  } catch (e) {
+    console.error("daily get error:", e.message);
+    res.status(500).json({ error: "server error" });
+  }
+});
+
+// POST /api/rewards/daily/:id/claim — collect a finished task (once per day, checked and paid atomically)
+app.post("/api/rewards/daily/:id/claim", auth, async (req, res) => {
+  try {
+    const task = DAILY_TASKS.find((t) => t.id === req.params.id);
+    if (!task) return res.status(404).json({ error: "unknown task" });
+    if (task.needsGames && !GAME_TASKS_LIVE) return res.status(400).json({ error: "This task isn't available yet." });
+    const day = await rollDaily(req.userId);
+    const filter = { _id: req.userId, "daily.day": day, "daily.claimed": { $ne: task.id } };
+    if (task.counter === "met") filter.$expr = { $gte: [{ $size: { $ifNull: ["$daily.met", []] } }, task.goal] };
+    else if (task.counter) filter["daily." + task.counter] = { $gte: task.goal };
+    const user = await User.findOneAndUpdate(
+      filter,
+      { $inc: { coins: task.reward }, $addToSet: { "daily.claimed": task.id } },
+      { returnDocument: "after" }
+    );
+    if (!user) return res.status(409).json({ error: "Not ready to collect yet." });
+    res.json(dailyView(user));
+  } catch (e) {
+    console.error("daily claim error:", e.message);
     res.status(500).json({ error: "server error" });
   }
 });
@@ -1189,6 +1303,9 @@ io.on("connection", (socket) => {
         entryFee,
       });
 
+      // Daily tasks: count this match for both people (each different person counts once a day).
+      if (socket.userId && p2.userId) { bumpDaily(socket.userId, "met", p2.userId); bumpDaily(p2.userId, "met", socket.userId); }
+
       // Remember that these two have met, so they can message each other afterwards.
       if (socket.userId && p2.userId) {
         Met.updateOne(
@@ -1214,9 +1331,10 @@ io.on("connection", (socket) => {
      Two strangers connect with no game chosen (gameMode is null until
      now). Either one can propose a game from the in-call rail; the other
      accepts, and THAT'S the moment coins get spent — not at queue time. */
+  // Entering any game costs MIN_COINS_TO_PLAY coins (see COIN RULES at the top). Paying the winner comes with the real games.
   const GAME_COSTS = {
-    dontlaugh: 1, vibecheck: 1, hottake: 1, mirrorme: 1,
-    echo: 1, finishmystory: 1,
+    dontlaugh: MIN_COINS_TO_PLAY, vibecheck: MIN_COINS_TO_PLAY, hottake: MIN_COINS_TO_PLAY, mirrorme: MIN_COINS_TO_PLAY,
+    echo: MIN_COINS_TO_PLAY, finishmystory: MIN_COINS_TO_PLAY, floppy: MIN_COINS_TO_PLAY,
   };
 
   socket.on("proposeGame", ({ roomId, game }) => {
@@ -1227,7 +1345,7 @@ io.on("connection", (socket) => {
   socket.on("acceptGame", async ({ roomId, game }) => {
     const room = rooms.get(roomId);
     if (!room) return;
-    const cost = GAME_COSTS[game] || 1;
+    const cost = GAME_COSTS[game] || MIN_COINS_TO_PLAY;
 
     const players = [room.offerer, room.answerer].filter(p => p.userId);
     // Atomic, race-safe deduction: only succeeds if the balance is still
@@ -1240,7 +1358,7 @@ io.on("connection", (socket) => {
         { new: true }
       );
       if (!updated) {
-        io.to(roomId).emit("gameRejected", { game, reason: "not enough coins", userId: p.userId });
+        io.to(roomId).emit("gameRejected", { game, reason: "not enough coins", need: cost, userId: p.userId });
         return;
       }
     }
@@ -1350,9 +1468,11 @@ io.on("connection", (socket) => {
   });
 
   // Match finished — save to DB and update points
-  socket.on("match:end", async ({ roomId, won, entryFee, gameMode }) => {
+  socket.on("match:end", async ({ roomId, won, gameMode }) => {
     const room = rooms.get(roomId);
     if (!room) return;
+    // The fee comes from the server's own record of this room — never from the browser (a browser could send any number).
+    const entryFee = Number(room.entryFee) || 0;
 
     // Only update DB if both players are authenticated
     const myInfo    = room.offerer.socketId   === socket.id ? room.offerer   : room.answerer;
@@ -1369,6 +1489,10 @@ io.on("connection", (socket) => {
           await User.findByIdAndUpdate(myInfo.userId,  { $inc: { points: loseInc, gamesPlayed: 1 } });
           await User.findByIdAndUpdate(oppInfo.userId, { $inc: { points: winInc,  wins: 1, gamesPlayed: 1 } });
         }
+
+        // Daily tasks (they stay locked until GAME_TASKS_LIVE=1, see DAILY TASKS)
+        await bumpDaily(myInfo.userId, "games"); await bumpDaily(oppInfo.userId, "games");
+        await bumpDaily(won ? myInfo.userId : oppInfo.userId, "wins");
 
         // Save match record
         await Match.create({
